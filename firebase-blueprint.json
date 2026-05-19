@@ -1,0 +1,135 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User profile including role and personal information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
+        "business": { "type": "string" },
+        "category": { "type": "string" },
+        "rut": { "type": "string" },
+        "role": { "type": "string", "enum": ["MEMBER", "PRESIDENTA", "VICE_PRESIDENTA", "TESORERA", "SECRETARIA", "DIRECTOR_1", "DIRECTOR_2", "DIRECTOR_3"] },
+        "paymentModality": { "type": "string", "enum": ["MENSUAL", "ANUAL"] },
+        "status": { "type": "string", "enum": ["ACTIVO", "MOROSO", "INACTIVO"] },
+        "debt": { "type": "number" },
+        "attendance": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "email", "role"]
+    },
+    "Minute": {
+      "title": "Meeting Minute",
+      "description": "Administrative records of meetings",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "content": { "type": "string" },
+        "status": { "type": "string", "enum": ["BORRADOR", "FIRMADA", "PUBLICADA"] },
+        "type": { "type": "string" },
+        "authorId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "date", "status", "authorId"]
+    },
+    "FinancialRecord": {
+      "title": "Financial Record",
+      "description": "Income and expenses tracking",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["INCOME", "EXPENSE"] },
+        "amount": { "type": "number" },
+        "category": { "type": "string" },
+        "description": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "recordedBy": { "type": "string" },
+        "year": { "type": "number" }
+      },
+      "required": ["type", "amount", "category", "date"]
+    },
+    "InstitutionalDocument": {
+      "title": "Institutional Document",
+      "description": "Public documentation for members like bylaws, records, etc.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "url": { "type": "string" },
+        "type": { "type": "string" },
+        "category": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "url", "type"]
+    },
+    "MeetingEvent": {
+      "title": "Meeting Event",
+      "description": "Information about upcoming and past meetings",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string" },
+        "date": { "type": "string", "format": "date" },
+        "time": { "type": "string" },
+        "location": { "type": "string" },
+        "agenda": { "type": "string" },
+        "type": { "type": "string", "enum": ["ASAMBLEA", "DIRECTORIO", "TALLER", "SOCIAL"] },
+        "status": { "type": "string", "enum": ["PROGRAMADA", "REALIZADA", "CANCELADA"] },
+        "rsvpYes": { "type": "array", "items": { "type": "string" }, "description": "Users who confirmed attendance" },
+        "rsvpNo": { "type": "array", "items": { "type": "string" }, "description": "Users who declined attendance" },
+        "attendanceRecord": { "type": "array", "items": { "type": "string" }, "description": "Users who actually attended the meeting" },
+        "selfAttendanceEnabled": { "type": "boolean", "description": "Whether members can mark their own attendance" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "date", "time", "location", "type", "status"]
+    },
+    "Payment": {
+      "title": "Member Payment",
+      "description": "Tracking of membership fee payments",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "amount": { "type": "number" },
+        "date": { "type": "string", "format": "date" },
+        "period": { "type": "string", "description": "e.g. 2026-05 or 2026-ANNUAL" },
+        "type": { "type": "string", "enum": ["MENSUAL", "ANUAL"] },
+        "recordedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "amount", "date", "period", "type"]
+    }
+  },
+  "firestore": {
+    "users": {
+      "schema": "User",
+      "description": "Collection of members and board users"
+    },
+    "minutes": {
+      "schema": "Minute",
+      "description": "Collection of meeting minutes"
+    },
+    "finances": {
+      "schema": "FinancialRecord",
+      "description": "Collection of income and expense records"
+    },
+    "documents": {
+      "schema": "InstitutionalDocument",
+      "description": "Collection of institutional documents and PDFs"
+    },
+    "events": {
+      "schema": "MeetingEvent",
+      "description": "Collection of meetings and activities"
+    },
+    "payments": {
+      "schema": "Payment",
+      "description": "Tracking of membership fees"
+    }
+  }
+}

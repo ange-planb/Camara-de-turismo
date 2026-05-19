@@ -1,0 +1,152 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return request.auth.token.email_verified == true;
+    }
+
+    function getRole() {
+      let path = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(path) ? get(path).data.role : 'MEMBER';
+    }
+
+    function isBoard() {
+      let role = getRole();
+      return role in ["PRESIDENTA", "VICE_PRESIDENTA", "TESORERA", "SECRETARIA", "DIRECTOR_1", "DIRECTOR_2", "DIRECTOR_3"];
+    }
+
+    function isPresidenta() {
+      return getRole() == "PRESIDENTA";
+    }
+
+    function isTreasurer() {
+      return getRole() == "TESORERA";
+    }
+
+    function isSecretary() {
+      return getRole() == "SECRETARIA";
+    }
+
+    function isValidId(id) {
+       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // --- Users Collection ---
+    match /users/{userId} {
+      function isValidUser(data) {
+        return data.keys().hasAll(['uid', 'name', 'email', 'role']) &&
+               data.uid is string &&
+               data.role in ['MEMBER', 'PRESIDENTA', 'VICE_PRESIDENTA', 'TESORERA', 'SECRETARIA', 'DIRECTOR_1', 'DIRECTOR_2', 'DIRECTOR_3'] &&
+               data.name is string && data.name.size() < 200 &&
+               data.email is string && data.email.size() < 200;
+      }
+
+      function isUserSelf(id) {
+        return isSignedIn() && request.auth.uid == id;
+      }
+
+      allow get: if isSignedIn();
+      allow list: if isSignedIn();
+
+      // Create: user can create their initial profile OR Board can create members
+      allow create: if isSignedIn() && (isUserSelf(userId) || isBoard());
+
+      // Update: self-promotion for bootstrap email, or self-update (excluding role), or BOARD management
+      allow update: if isSignedIn() && (isBoard() || isUserSelf(userId));
+
+      allow delete: if isSignedIn() && isPresidenta();
+    }
+
+    // --- Finances Collection ---
+    match /finances/{recordId} {
+      function isValidRecord(data) {
+        return data.keys().hasAll(['type', 'amount', 'category', 'date']) &&
+               data.amount is number && data.amount > 0 &&
+               data.type in ['INCOME', 'EXPENSE'];
+      }
+
+      allow read, list: if isSignedIn();
+      allow create, update, delete: if isSignedIn() && (isTreasurer() || isPresidenta()) && isValidRecord(request.resource.data);
+    }
+
+    // --- Transactions Collection (Real-time summary) ---
+    match /transactions/{transId} {
+      allow read, list: if isSignedIn();
+      allow create, update, delete: if isSignedIn() && isBoard();
+    }
+
+    // --- Minutes Collection ---
+    match /minutes/{minuteId} {
+      function isValidMinute(data) {
+        return data.keys().hasAll(['title', 'date', 'fileUrl', 'type']) &&
+               data.title is string && data.title.size() < 500 &&
+               data.fileUrl is string && data.fileUrl.size() < 2000;
+      }
+
+      allow read: if isSignedIn();
+      allow list: if isSignedIn();
+      
+      allow create, update: if isSignedIn() && isBoard() && isValidMinute(request.resource.data);
+      allow delete: if isSignedIn() && isBoard();
+    }
+
+    // --- Documents Collection ---
+    match /documents/{docId} {
+      function isValidDocument(data) {
+        return data.keys().hasAll(['title', 'url', 'type']) &&
+               data.title is string && data.title.size() < 500 &&
+               data.url is string && data.url.size() < 2000;
+      }
+
+      allow read: if isSignedIn();
+      allow list: if isSignedIn();
+      
+      allow create, update: if isSignedIn() && isBoard() && isValidDocument(request.resource.data);
+      allow delete: if isSignedIn() && isBoard();
+    }
+
+    // --- Events Collection ---
+    match /events/{eventId} {
+      function isValidEvent(data) {
+        return data.keys().hasAll(['title', 'date', 'time', 'location', 'type', 'status']) &&
+               data.title is string && data.title.size() < 500 &&
+               data.status in ['PROGRAMADA', 'REALIZADA', 'CANCELADA'];
+      }
+
+      allow read: if isSignedIn();
+      allow list: if isSignedIn();
+      
+      allow create, delete: if isSignedIn() && isBoard() && isValidEvent(request.resource.data);
+      
+      allow update: if isSignedIn() && (
+        isBoard() ||
+        // Members RSVPing
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['rsvpYes', 'rsvpNo']) ||
+        // Members marking attendance only if enabled and it's their own UID
+        (resource.data.get('selfAttendanceEnabled', false) == true && 
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['attendanceRecord']))
+      );
+    }
+
+    // --- Payments Collection ---
+    match /payments/{paymentId} {
+      function isValidPayment(data) {
+        return data.keys().hasAll(['userId', 'amount', 'date', 'period', 'type']) &&
+               data.amount is number && data.amount >= 0;
+      }
+
+      allow read, list: if isSignedIn();
+      allow create, update, delete: if isSignedIn() && (isTreasurer() || isPresidenta()) && isValidPayment(request.resource.data);
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Cámara de Turismo San Vicente",
+  "description": "Portal de gestión institucional para la Cámara de Turismo de San Vicente de Tagua Tagua.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
