@@ -1,11 +1,13 @@
 {
   "name": "Cámara de Turismo San Vicente",
-  "short_name": "Turismo SV",
+  "short_name": "Cámara Turismo",
   "description": "Plataforma de gestión para socios de la Cámara de Turismo de San Vicente de Tagua Tagua.",
-  "start_url": "/",
+  "theme_color": "#00695c",
+  "background_color": "#fff8e1",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#2DD4BF",
+  "orientation": "portrait",
+  "scope": "/",
+  "start_url": "https://camara-de-turismo.replit.dev/",
   "icons": [
     {
       "src": "/logo.svg",
