@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { showEventNotification } from '../lib/notifications';
 import { 
   Calendar as CalendarIcon, 
   Clock, 
@@ -118,6 +119,10 @@ export default function Events() {
         attendees: [],
         createdAt: Timestamp.now()
       });
+      await showEventNotification(
+        `Nuevo evento: ${newEvent.title}`,
+        `${newEvent.date} a las ${newEvent.time} — ${newEvent.location}`
+      );
       setShowAddModal(false);
       setNewEvent({
         title: "",
