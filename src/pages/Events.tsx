@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { showEventNotification } from '../lib/notifications';
 import { 
   Calendar as CalendarIcon, 
   Clock, 
@@ -119,10 +118,6 @@ export default function Events() {
         attendees: [],
         createdAt: Timestamp.now()
       });
-      await showEventNotification(
-        `Nuevo evento: ${newEvent.title}`,
-        `${newEvent.date} a las ${newEvent.time} — ${newEvent.location}`
-      );
       setShowAddModal(false);
       setNewEvent({
         title: "",
@@ -188,14 +183,14 @@ export default function Events() {
     if (!rawData || rawData.length === 0) return;
 
     try {
-      // 1. Fetch current users to match by email or RUT
-      const usersSnap = await getDocs(collection(db, 'users'));
+      // 1. Fetch current socios to match by email or RUT
+      const usersSnap = await getDocs(collection(db, 'socios'));
       const usersData = usersSnap.docs
         .map(doc => ({
           uid: doc.id,
-          name: doc.data().name || '',
-          email: doc.data().email?.toLowerCase().trim() || '',
-          rut: doc.data().rut?.replace(/\./g, '').replace(/-/g, '').toLowerCase().trim() || ''
+          name: doc.data().name || doc.data().nombre || '',
+          email: (doc.data().email || doc.data().correo)?.toLowerCase().trim() || '',
+          rut: (doc.data().rut || doc.data().RUT)?.replace(/\./g, '').replace(/-/g, '').toLowerCase().trim() || ''
         }))
         .filter(u => u.email.length > 3 || u.rut.length > 5);
 

@@ -296,7 +296,7 @@ export default function Finances() {
           isAnnual: true
         }, { merge: true });
         
-        const userRef = doc(db, 'users', targetUid);
+        const userRef = doc(db, 'socios', targetUid);
         batch.update(userRef, {
           status: 'ACTIVO',
           paymentModality: 'ANUAL',
@@ -325,7 +325,7 @@ export default function Finances() {
         const sortedHistory = [...selectedMonthHistory].sort().reverse();
         const latestMonth = sortedHistory[0];
         
-        const userRef = doc(db, 'users', targetUid);
+        const userRef = doc(db, 'socios', targetUid);
         batch.update(userRef, {
           status: 'ACTIVO', // Direct to active to satisfy user request
           lastPaymentMonth: latestMonth > (selectedMember.lastPaymentMonth || "") ? latestMonth : selectedMember.lastPaymentMonth,
@@ -383,7 +383,7 @@ export default function Finances() {
     let unsubscribePayments = () => {};
 
     if (activeTab === 'FEES') {
-      const usersQuery = query(collection(db, 'users'), orderBy('name', 'asc'));
+      const usersQuery = query(collection(db, 'socios'), orderBy('name', 'asc'));
       unsubscribeUsers = onSnapshot(usersQuery, (snapshot) => {
         const usersData = snapshot.docs.map(doc => ({
           uid: doc.id,
@@ -445,7 +445,7 @@ export default function Finances() {
       // 2. Update user debt and status
       const newDebt = Math.max(0, (selectedMember.debt || 0) - paymentForm.amount);
       const newStatus = newDebt === 0 ? 'ACTIVO' : 'MOROSO';
-      const userRef = doc(db, 'users', selectedMember.uid);
+      const userRef = doc(db, 'socios', selectedMember.uid);
       
       const updates: any = {
         debt: newDebt,
@@ -624,7 +624,7 @@ export default function Finances() {
             if (lastMonth && (!member.lastPaymentMonth || lastMonth > member.lastPaymentMonth)) {
               updates.lastPaymentMonth = lastMonth;
             }
-            batches[batches.length - 1].update(doc(db, 'users', member.uid), updates);
+            batches[batches.length - 1].update(doc(db, 'socios', member.uid), updates);
             batchOperationCount++;
             updatedCount++;
           }
@@ -668,16 +668,14 @@ export default function Finances() {
             >
               RESUMEN GENERAL
             </button>
-            {isBoard && (
-              <button 
-                onClick={() => setActiveTab('FEES')}
-                className={`px-6 py-2.5 rounded-xl text-xs font-black tracking-widest transition-all ${
-                  activeTab === 'FEES' ? 'bg-white shadow-sm text-primary' : 'text-light-coffee hover:text-coffee'
-                }`}
-              >
-                CUOTAS
-              </button>
-            )}
+            <button 
+              onClick={() => setActiveTab('FEES')}
+              className={`px-6 py-2.5 rounded-xl text-xs font-black tracking-widest transition-all ${
+                activeTab === 'FEES' ? 'bg-white shadow-sm text-primary' : 'text-light-coffee hover:text-coffee'
+              }`}
+            >
+              CUOTAS
+            </button>
             {isBoard && (
               <button 
                 onClick={() => setActiveTab('EXPENSES')}
@@ -858,7 +856,7 @@ export default function Finances() {
               </div>
             </div>
           </>
-        ) : activeTab === 'FEES' && !isBoard ? null : (
+        ) : (
           /* FEE MANAGEMENT TAB */
           <div className="space-y-8">
             <section className="grid grid-cols-1 md:grid-cols-4 gap-4">

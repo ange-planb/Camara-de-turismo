@@ -16,41 +16,40 @@ service cloud.firestore {
     }
 
     function getRole() {
-      let path = /databases/$(database)/documents/users/$(request.auth.uid);
-      return exists(path) ? get(path).data.role : 'MEMBER';
+      return isSignedIn() && exists(/databases/$(database)/documents/socios/$(request.auth.uid)) ? 
+        get(/databases/$(database)/documents/socios/$(request.auth.uid)).data.get('role', 
+          get(/databases/$(database)/documents/socios/$(request.auth.uid)).data.get('rol', 
+            get(/databases/$(database)/documents/socios/$(request.auth.uid)).data.get('categoria', 'MEMBER')
+          )
+        ) : 'MEMBER';
     }
 
     function isBoard() {
-      let role = getRole();
-      return role in ["PRESIDENTA", "VICE_PRESIDENTA", "TESORERA", "SECRETARIA", "DIRECTOR_1", "DIRECTOR_2", "DIRECTOR_3"];
+      return getRole() in [
+        "PRESIDENTA", "VICE_PRESIDENTA", "TESORERA", "SECRETARIA", "DIRECTOR_1", "DIRECTOR_2", "DIRECTOR_3",
+        "presidenta", "vice_presidenta", "tesorera", "secretaria", "director_1", "director_2", "director_3",
+        "director", "DIRECTOR", "DIRECTORA", "directora", "SECRETARIO", "secretario", "TESORERO", "tesorero"
+      ];
     }
 
     function isPresidenta() {
-      return getRole() == "PRESIDENTA";
+      return getRole() == "PRESIDENTA" || getRole() == "presidenta";
     }
 
     function isTreasurer() {
-      return getRole() == "TESORERA";
+      return getRole() == "TESORERA" || getRole() == "tesorera" || getRole() == "TESORERO" || getRole() == "tesorero";
     }
 
     function isSecretary() {
-      return getRole() == "SECRETARIA";
+      return getRole() == "SECRETARIA" || getRole() == "secretaria" || getRole() == "SECRETARIO" || getRole() == "secretario";
     }
 
     function isValidId(id) {
        return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
-    // --- Users Collection ---
-    match /users/{userId} {
-      function isValidUser(data) {
-        return data.keys().hasAll(['uid', 'name', 'email', 'role']) &&
-               data.uid is string &&
-               data.role in ['MEMBER', 'PRESIDENTA', 'VICE_PRESIDENTA', 'TESORERA', 'SECRETARIA', 'DIRECTOR_1', 'DIRECTOR_2', 'DIRECTOR_3'] &&
-               data.name is string && data.name.size() < 200 &&
-               data.email is string && data.email.size() < 200;
-      }
-
+    // --- Socios Collection ---
+    match /socios/{userId} {
       function isUserSelf(id) {
         return isSignedIn() && request.auth.uid == id;
       }
@@ -64,7 +63,12 @@ service cloud.firestore {
       // Update: self-promotion for bootstrap email, or self-update (excluding role), or BOARD management
       allow update: if isSignedIn() && (isBoard() || isUserSelf(userId));
 
-      allow delete: if isSignedIn() && isPresidenta();
+      allow delete: if isSignedIn() && (
+        isBoard() || 
+        ( (userId.startsWith("user_") || userId.startsWith("pre_") || userId.startsWith("pending_")) && 
+          (resource.data.get("email", "") == request.auth.token.email || 
+           resource.data.get("correo", "") == request.auth.token.email) )
+      );
     }
 
     // --- Finances Collection ---

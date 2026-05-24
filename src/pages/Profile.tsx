@@ -23,6 +23,7 @@ import { useAuth } from '../context/AuthContext';
 import { db } from '../lib/firebase';
 import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firestoreUtils';
+import { toast } from 'sonner';
 
 export default function Profile() {
   const { user, logout, isBoard } = useAuth();
@@ -49,7 +50,7 @@ export default function Profile() {
     async function loadUserData() {
       if (!user) return;
       try {
-        const userDoc = await getDoc(doc(db, 'users', user.uid));
+        const userDoc = await getDoc(doc(db, 'socios', user.uid));
         if (userDoc.exists()) {
           const data = userDoc.data();
           setUserInfo({
@@ -69,7 +70,7 @@ export default function Profile() {
           });
         }
       } catch (error) {
-        handleFirestoreError(error, OperationType.GET, `users/${user.uid}`);
+        handleFirestoreError(error, OperationType.GET, `socios/${user.uid}`);
       } finally {
         setLoading(false);
       }
@@ -98,7 +99,7 @@ export default function Profile() {
     if (!user) return;
     setIsSaving(true);
     try {
-      await updateDoc(doc(db, 'users', user.uid), {
+      await updateDoc(doc(db, 'socios', user.uid), {
         name: userInfo.name,
         phone: userInfo.phone,
         address: userInfo.address,
@@ -110,7 +111,7 @@ export default function Profile() {
       });
       setIsEditing(false);
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `users/${user.uid}`);
+      handleFirestoreError(error, OperationType.UPDATE, `socios/${user.uid}`);
     } finally {
       setIsSaving(false);
     }
@@ -360,11 +361,11 @@ export default function Profile() {
                            if (!window.confirm("¿CONFIRMAR RESET TOTAL? Se borrarán socios, actas, finanzas y documentos para partir de cero.")) return;
                            const toastId = toast.loading("Reiniciando base de datos...");
                            try {
-                             const collections = ['users', 'documents', 'minutes', 'events', 'transactions', 'payments'];
+                             const collections = ['socios', 'documents', 'minutes', 'events', 'transactions', 'payments'];
                              const { collection, getDocs, writeBatch, query, where } = await import('firebase/firestore');
                              
                              for (const collName of collections) {
-                               const q = collName === 'users' ? query(collection(db, collName), where('email', '!=', user.email)) : collection(db, collName);
+                               const q = collName === 'socios' ? query(collection(db, collName), where('email', '!=', user.email)) : collection(db, collName);
                                const snap = await getDocs(q);
                                const batch = writeBatch(db);
                                snap.docs.forEach(doc => batch.delete(doc.ref));

@@ -101,7 +101,7 @@ export default function Members() {
         });
       }
 
-      await setDoc(doc(db, 'users', id), payload, { merge: true });
+      await setDoc(doc(db, 'socios', id), payload, { merge: true });
       toast.success(editingMember ? "Socio actualizado" : "Socio agregado exitosamente");
       setShowAddModal(false);
       setEditingMember(null);
@@ -116,7 +116,7 @@ export default function Members() {
     if (!window.confirm("¿Estás seguro de eliminar a este socio? Esta acción no se puede deshacer.")) return;
     
     try {
-      await deleteDoc(doc(db, 'users', id));
+      await deleteDoc(doc(db, 'socios', id));
       toast.success("Socio eliminado");
     } catch (error) {
       toast.error("Error al eliminar");
@@ -126,7 +126,6 @@ export default function Members() {
   const [recordingPayment, setRecordingPayment] = useState<string | null>(null);
   const [showPaymentOptions, setShowPaymentOptions] = useState<string | null>(null);
   const [showMemberMenu, setShowMemberMenu] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'moroso' | 'activo'>('all');
 
   const handleCSVData = async (rawData: any[]) => {
     if (!rawData || rawData.length === 0) return;
@@ -258,8 +257,8 @@ export default function Members() {
           if (betterNameIdx !== -1) name = currentRow[betterNameIdx];
         }
 
-          const id = 'pre_' + emailClean.replace(/[^a-zA-Z0-9]/g, '');
-          const userRef = doc(db, 'users', id);
+          const id = 'user_' + emailClean.replace(/[^a-zA-Z0-9]/g, '');
+          const userRef = doc(db, 'socios', id);
           
           batch.set(userRef, {
             uid: 'pending_' + Math.random().toString(36).substring(2, 8),
@@ -330,8 +329,8 @@ export default function Members() {
   };
 
   useEffect(() => {
-    // Try to listen to 'users' primarily but handle case where 'socios' might be used
-    const q = query(collection(db, 'users'));
+    // Listen directly to the 'socios' collection (fully resolved custom database)
+    const q = query(collection(db, 'socios'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       let usersData = snapshot.docs.map(doc => {
         const d = doc.data();
@@ -361,20 +360,13 @@ export default function Members() {
   }, []);
 
   const filteredMembers = React.useMemo(() => {
-    return members.filter(member => {
-      const matchesSearch = (
-        (member.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (member.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (member.business || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (member.rut || '').toLowerCase().includes(searchTerm.toLowerCase())
-      );
-      const isMoroso = member.debt > 0 || member.status === 'MOROSO' || member.estado === 'MOROSO';
-      const matchesFilter = !isBoard || statusFilter === 'all' ||
-        (statusFilter === 'moroso' && isMoroso) ||
-        (statusFilter === 'activo' && !isMoroso);
-      return matchesSearch && matchesFilter;
-    });
-  }, [searchTerm, members, statusFilter, isBoard]);
+    return members.filter(member => 
+      (member.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (member.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (member.business || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (member.rut || '').toLowerCase().includes(searchTerm.toLowerCase())
+    );
+  }, [searchTerm, members]);
 
   const handleRecordPayment = async (memberId: string, type: 'MENSUAL' | 'ANUAL') => {
     setRecordingPayment(memberId);
@@ -386,7 +378,7 @@ export default function Members() {
       const batch = writeBatch(db);
       
       // 1. Update user
-      const userRef = doc(db, 'users', memberId);
+      const userRef = doc(db, 'socios', memberId);
       batch.update(userRef, {
         debt: 0,
         status: 'ACTIVO',
@@ -480,7 +472,7 @@ export default function Members() {
                 </p>
               </div>
               <div className="flex items-center gap-3 w-full sm:w-auto overflow-x-auto pb-2 sm:pb-0">
-                {isPresidenta && (
+                {isBoard && (
                   <button 
                     onClick={() => setShowAddModal(true)}
                     className="whitespace-nowrap px-4 py-2 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md flex items-center gap-2 hover:bg-primary-dark transition-all"
@@ -488,7 +480,7 @@ export default function Members() {
                     <UserPlus size={14} /> NUEVO SOCIO
                   </button>
                 )}
-                {isPresidenta && (
+                {isBoard && (
                   <CSVImporter 
                     label="IMPORTAR"
                     className="whitespace-nowrap px-4 py-2 bg-surface text-coffee border border-outline-variant/30 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-sm flex items-center gap-2 hover:bg-surface-container transition-all"
@@ -518,29 +510,6 @@ export default function Members() {
                 </div>
               </div>
             </div>
-
-            {isBoard && (
-              <div className="flex items-center gap-2">
-                {[
-                  { key: 'all', label: `Todos (${members.length})` },
-                  { key: 'activo', label: `Al día (${members.filter(m => !(m.debt > 0 || m.status === 'MOROSO' || m.estado === 'MOROSO')).length})` },
-                  { key: 'moroso', label: `Morosos (${members.filter(m => m.debt > 0 || m.status === 'MOROSO' || m.estado === 'MOROSO').length})` },
-                ].map(({ key, label }) => (
-                  <button
-                    key={key}
-                    onClick={() => setStatusFilter(key as any)}
-                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
-                      statusFilter === key
-                        ? key === 'moroso' ? 'bg-red-500 text-white shadow-md' : 'bg-primary text-white shadow-md'
-                        : 'bg-white border border-outline-variant/30 text-light-coffee hover:bg-surface-container'
-                    }`}
-                  >
-                    {key === 'moroso' && <AlertTriangle className="inline mr-1" size={10} />}
-                    {label}
-                  </button>
-                ))}
-              </div>
-            )}
 
             <div className="flex gap-2">
               <div className="relative flex-grow">
@@ -578,7 +547,7 @@ export default function Members() {
                       initial={{ opacity: 0, scale: 0.95 }}
                       animate={{ opacity: 1, scale: 1 }}
                       transition={{ delay: i * 0.05 }}
-                      className={`bg-white border ${isBoard && isMoroso ? 'border-l-8 border-l-red-500' : 'border-outline-variant/30'} rounded-2xl p-6 shadow-sm relative group`}
+                      className={`bg-white border ${isMoroso ? 'border-l-8 border-l-red-500' : 'border-outline-variant/30 text-green-500'} rounded-2xl p-6 shadow-sm relative group`}
                     >
                       <div className="flex justify-between items-start mb-6">
                         <div className="flex items-center gap-4">
@@ -590,12 +559,10 @@ export default function Members() {
                             <p className="text-xs font-medium text-light-coffee">RUT: {member.rut || member.RUT || 'No reg.'}</p>
                           </div>
                         </div>
-                        {isBoard && (
-                          <div className={`flex items-center gap-2 px-4 py-1.5 rounded-full border text-[10px] font-bold uppercase tracking-wider ${isMoroso ? 'text-red-500 bg-red-50' : 'text-green-500 bg-green-50'}`}>
-                            {isMoroso ? <AlertTriangle size={14} /> : <UserCheck size={14} />}
-                            {isMoroso ? 'Moroso' : 'Al día'}
-                          </div>
-                        )}
+                        <div className={`flex items-center gap-2 px-4 py-1.5 rounded-full border text-[10px] font-bold uppercase tracking-wider ${isMoroso ? 'text-red-500 bg-red-50' : 'text-green-500 bg-green-50'}`}>
+                          {isMoroso ? <AlertTriangle size={14} /> : <UserCheck size={14} />}
+                          {isMoroso ? 'Moroso' : 'Al día'}
+                        </div>
                       </div>
 
                       <div className="space-y-4 mb-8">
@@ -621,7 +588,7 @@ export default function Members() {
                         </div>
                       </div>
 
-                      <div className={`grid ${isBoard ? 'grid-cols-3' : 'grid-cols-1'} gap-3 pt-6 border-t border-surface-container`}>
+                      <div className="grid grid-cols-3 gap-3 pt-6 border-t border-surface-container">
                         <button 
                           onClick={() => {
                             if (member.phone) {
@@ -637,7 +604,7 @@ export default function Members() {
                           <span className="text-[9px] font-bold uppercase tracking-tighter">WhatsApp</span>
                         </button>
                         
-                        {isTreasurer && (
+                        {isTreasurer ? (
                           <div className="relative">
                             <button 
                               onClick={() => setShowPaymentOptions(showPaymentOptions === member.id ? null : member.id)}
@@ -690,64 +657,67 @@ export default function Members() {
                               )}
                             </AnimatePresence>
                           </div>
+                        ) : (
+                          <button className="flex flex-col items-center gap-1.5 p-3 rounded-xl text-outline-variant bg-surface cursor-not-allowed opacity-50">
+                            <Wallet size={20} />
+                            <span className="text-[9px] font-bold uppercase tracking-tighter">Tesorera</span>
+                          </button>
                         )}
 
-                        {isPresidenta && (
-                          <div className="relative group/options">
-                            <button 
-                              onClick={() => setShowMemberMenu(showMemberMenu === member.id ? null : member.id)}
-                              className="flex flex-col items-center gap-1.5 p-3 rounded-xl hover:bg-surface-container transition-all text-coffee w-full"
-                            >
-                              <MoreVertical size={20} className="text-primary" />
-                              <span className="text-[9px] font-bold uppercase tracking-tighter">Opciones</span>
-                            </button>
-                            
-                            <AnimatePresence>
-                              {showMemberMenu === member.id && (
-                                <motion.div 
-                                  initial={{ opacity: 0, scale: 0.95 }}
-                                  animate={{ opacity: 1, scale: 1 }}
-                                  exit={{ opacity: 0, scale: 0.95 }}
-                                  className="absolute bottom-full right-0 mb-2 w-40 bg-white rounded-xl shadow-xl border border-outline-variant/30 p-1 z-50"
+                        <div className="relative group/options">
+                          <button 
+                            onClick={() => {
+                              if (!isBoard) {
+                                toast.error("Solo la directiva puede realizar cambios");
+                                return;
+                              }
+                              setShowMemberMenu(showMemberMenu === member.id ? null : member.id);
+                            }}
+                            className={`flex flex-col items-center gap-1.5 p-3 rounded-xl hover:bg-surface-container transition-all text-coffee ${!isBoard && 'opacity-20 translate-y-1 scale-95 hover:bg-transparent cursor-not-allowed'}`}
+                          >
+                            <MoreVertical size={20} className="text-primary" />
+                            <span className="text-[9px] font-bold uppercase tracking-tighter">Opciones</span>
+                          </button>
+                          
+                          <AnimatePresence>
+                            {isBoard && showMemberMenu === member.id && (
+                              <motion.div 
+                                initial={{ opacity: 0, scale: 0.95 }}
+                                animate={{ opacity: 1, scale: 1 }}
+                                exit={{ opacity: 0, scale: 0.95 }}
+                                className="absolute bottom-full right-0 mb-2 w-40 bg-white rounded-xl shadow-xl border border-outline-variant/30 p-1 z-50"
+                              >
+                                <button 
+                                  onClick={() => {
+                                    setEditingMember(member);
+                                    setNewMember({
+                                      name: member.name || '',
+                                      email: member.email || '',
+                                      rut: member.rut || '',
+                                      business: member.business || '',
+                                      phone: member.phone || '',
+                                      category: member.category || 'COMERCIO'
+                                    });
+                                    setShowAddModal(true);
+                                    setShowMemberMenu(null);
+                                  }}
+                                  className="w-full text-left p-2 hover:bg-surface rounded-lg text-xs font-bold text-coffee flex items-center gap-2"
                                 >
-                                  <button 
-                                    onClick={() => {
-                                      setEditingMember(member);
-                                      setNewMember({
-                                        name: member.name || '',
-                                        email: member.email || '',
-                                        rut: member.rut || '',
-                                        business: member.business || '',
-                                        phone: member.phone || '',
-                                        category: member.category || 'COMERCIO'
-                                      });
-                                      setShowAddModal(true);
-                                      setShowMemberMenu(null);
-                                    }}
-                                    className="w-full text-left p-2 hover:bg-surface rounded-lg text-xs font-bold text-coffee flex items-center gap-2"
-                                  >
-                                    <Check size={14} className="text-primary" /> Editar Datos
-                                  </button>
-                                  <button 
-                                    onClick={() => {
-                                      handleDeleteMember(member.id);
-                                      setShowMemberMenu(null);
-                                    }}
-                                    className="w-full text-left p-2 hover:bg-red-50 rounded-lg text-xs font-bold text-red-500 flex items-center gap-2"
-                                  >
-                                    <AlertTriangle size={14} /> Eliminar
-                                  </button>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </div>
-                        )}
-
-                        {!isBoard && (
-                          <div className="col-span-full pt-1">
-                            <p className="text-[9px] text-light-coffee text-center font-medium italic">Solo lectura</p>
-                          </div>
-                        )}
+                                  <Check size={14} className="text-primary" /> Editar Datos
+                                </button>
+                                <button 
+                                  onClick={() => {
+                                    handleDeleteMember(member.id);
+                                    setShowMemberMenu(null);
+                                  }}
+                                  className="w-full text-left p-2 hover:bg-red-50 rounded-lg text-xs font-bold text-red-500 flex items-center gap-2"
+                                >
+                                  <AlertTriangle size={14} /> Eliminar
+                                </button>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+                        </div>
                       </div>
                     </motion.article>
                   );
@@ -780,7 +750,7 @@ export default function Members() {
                         <th className="px-6 py-4">RUT</th>
                         <th className="px-6 py-4">Empresa</th>
                         <th className="px-6 py-4">Categoría</th>
-                        {isBoard && <th className="px-6 py-4 text-center">Estado</th>}
+                        <th className="px-6 py-4 text-center">Estado</th>
                         <th className="px-6 py-4 text-right">Acciones</th>
                       </tr>
                     </thead>
@@ -800,15 +770,13 @@ export default function Members() {
                             <td className="px-6 py-4 text-sm text-light-coffee">{member.rut || member.RUT}</td>
                             <td className="px-6 py-4 text-sm font-medium text-coffee">{member.business || member.emprendimiento}</td>
                             <td className="px-6 py-4 text-sm text-light-coffee">{member.category || member.categoria}</td>
-                            {isBoard && (
-                              <td className="px-6 py-4 text-center">
-                                <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${isMoroso ? 'text-red-500 bg-red-50' : 'text-green-500 bg-green-50'}`}>
-                                  {isMoroso ? 'Moroso' : 'Al día'}
-                                </span>
-                              </td>
-                            )}
+                            <td className="px-6 py-4 text-center">
+                              <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${isMoroso ? 'text-red-500 bg-red-50' : 'text-green-500 bg-green-50'}`}>
+                                {isMoroso ? 'Moroso' : 'Al día'}
+                              </span>
+                            </td>
                             <td className="px-6 py-4 text-right">
-                              {isPresidenta ? (
+                              {isBoard ? (
                                 <div className="flex justify-end gap-2">
                                   <button 
                                     onClick={() => {

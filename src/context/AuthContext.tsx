@@ -80,6 +80,38 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   return null;
 }
 
+function normalizeUserRole(userData: any): UserRole {
+  let rawRole = userData.role || userData.rol || '';
+  
+  // If no direct role/rol but is defined in category/categoria
+  if (!rawRole && userData.categoria) {
+    const catLower = userData.categoria.toLowerCase().trim();
+    if (['director', 'directora', 'director_1', 'director_2', 'director_3', 'presidenta', 'vice_presidenta', 'tesorera', 'secretaria', 'secretario', 'tesorero'].includes(catLower)) {
+      rawRole = catLower;
+    }
+  }
+  if (!rawRole && userData.category) {
+    const catLower = userData.category.toLowerCase().trim();
+    if (['director', 'directora', 'director_1', 'director_2', 'director_3', 'presidenta', 'vice_presidenta', 'tesorera', 'secretaria', 'secretario', 'tesorero'].includes(catLower)) {
+      rawRole = catLower;
+    }
+  }
+
+  if (!rawRole) return 'MEMBER';
+
+  const upper = rawRole.toUpperCase().trim().replace(/[-]/g, '_');
+  if (upper.includes('PRESIDEN')) return 'PRESIDENTA';
+  if (upper.includes('VICE')) return 'VICE_PRESIDENTA';
+  if (upper.includes('TESORER')) return 'TESORERA';
+  if (upper.includes('SECRETAR')) return 'SECRETARIA';
+  if (upper.includes('DIRECTOR_1') || upper === 'DIRECTOR 1') return 'DIRECTOR_1';
+  if (upper.includes('DIRECTOR_2') || upper === 'DIRECTOR 2') return 'DIRECTOR_2';
+  if (upper.includes('DIRECTOR_3') || upper === 'DIRECTOR 3') return 'DIRECTOR_3';
+  if (upper.includes('DIRECTOR') || upper.includes('DIRECTORA')) return 'DIRECTOR_1';
+
+  return 'MEMBER';
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [role, setRole] = useState<UserRole | null>(null);
@@ -93,12 +125,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const emailToQuery = firebaseUser.email?.toLowerCase().trim() || '';
           
           // 1. Check if doc with UID already exists
-          const userDocRef = doc(db, 'users', firebaseUser.uid);
+          const userDocRef = doc(db, 'socios', firebaseUser.uid);
           const userDoc = await getDoc(userDocRef);
 
           if (userDoc.exists()) {
             // Already identified
-            setRole(userDoc.data().role as UserRole);
+            const userData = userDoc.data();
+            setRole(normalizeUserRole(userData));
           } else {
             // 2. New login, check if there's a pre-registered doc (from CSV or manual add)
             // Handle Gmail dots and aliases for robust matching
@@ -106,21 +139,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const emailBase = emailToQuery.split('@')[0];
             const normalizedEmail = isGmail ? emailBase.replace(/\./g, '') + '@gmail.com' : emailToQuery;
             
-            // Search by exact email or normalized email
-            const q = query(collection(db, 'users'), where('email', 'in', [emailToQuery, normalizedEmail]));
-            const querySnapshot = await getDocs(q);
+            // Search in both 'email' and 'correo' fields to be 100% robust
+            const qEmail = query(collection(db, 'socios'), where('email', 'in', [emailToQuery, normalizedEmail]));
+            const qCorreo = query(collection(db, 'socios'), where('correo', 'in', [emailToQuery, normalizedEmail]));
+            
+            const [snapEmail, snapCorreo] = await Promise.all([
+              getDocs(qEmail),
+              getDocs(qCorreo)
+            ]);
+            
+            let preDoc = null;
+            if (!snapEmail.empty) {
+              preDoc = snapEmail.docs[0];
+            } else if (!snapCorreo.empty) {
+              preDoc = snapCorreo.docs[0];
+            }
 
-            if (!querySnapshot.empty) {
-              // Found a match - use the first one
-              const preDoc = querySnapshot.docs[0];
+            if (preDoc) {
               const rawData = preDoc.data();
+              const standardizedRole = normalizeUserRole(rawData);
               
               // Standardize to English fields while preserving Spanish ones for safety
               const standardizedData = {
                 uid: firebaseUser.uid,
                 name: rawData.name || rawData.nombre || firebaseUser.displayName || 'Socio',
                 email: (rawData.email || rawData.correo || emailToQuery).toLowerCase().trim(),
-                role: rawData.role || rawData.rol || 'MEMBER',
+                role: standardizedRole,
                 status: rawData.status || rawData.estado || 'ACTIVO',
                 rut: rawData.rut || rawData.RUT || 'Pte.',
                 business: rawData.business || rawData.emprendimiento || '',
@@ -128,7 +172,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 category: rawData.category || rawData.categoria || 'COMERCIO',
                 debt: rawData.debt || 0,
                 attendance: rawData.attendance || 0,
-                updatedAt: new Date().toISOString()
+                updatedAt: new Date().toISOString(),
+                
+                // Add Spanish mappings so they look clean and complete on the Firebase console
+                nombre: rawData.name || rawData.nombre || firebaseUser.displayName || 'Socio',
+                correo: (rawData.email || rawData.correo || emailToQuery).toLowerCase().trim(),
+                rol: standardizedRole,
+                estado: rawData.status || rawData.estado || 'ACTIVO',
+                RUT: rawData.rut || rawData.RUT || 'Pte.',
+                emprendimiento: rawData.business || rawData.emprendimiento || '',
+                telefono: rawData.phone || rawData.telefono || '',
+                categoria: rawData.category || rawData.categoria || 'COMERCIO'
               };
 
               // Move data to the official UID doc
@@ -136,14 +190,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
               // Delete OLD placeholder to prevent "vitiated" or double entries
               if (preDoc.id !== firebaseUser.uid) {
-                await deleteDoc(doc(db, 'users', preDoc.id));
+                await deleteDoc(doc(db, 'socios', preDoc.id));
               }
               
-              setRole(standardizedData.role as UserRole);
+              setRole(standardizedRole);
             } else if (emailToQuery === 'solucionesgraficasplanb@gmail.com') {
               // Auto-bootstrap for system owner
               const presidentRole: UserRole = 'PRESIDENTA';
-              await setDoc(userDocRef, {
+              const bootstrapData = {
                 uid: firebaseUser.uid,
                 name: firebaseUser.displayName || 'Presidenta',
                 email: emailToQuery,
@@ -151,8 +205,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 status: 'ACTIVO',
                 debt: 0,
                 attendance: 0,
-                createdAt: new Date().toISOString()
-              });
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                nombre: firebaseUser.displayName || 'Presidenta',
+                correo: emailToQuery,
+                rol: presidentRole,
+                estado: 'ACTIVO'
+              };
+              await setDoc(userDocRef, bootstrapData);
               setRole(presidentRole);
             } else {
               // Not found in DB

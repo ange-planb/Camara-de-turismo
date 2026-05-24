@@ -28,7 +28,7 @@ interface SidebarProps {
 export default function Sidebar({ isCollapsed, setIsCollapsed }: SidebarProps) {
   const { isBoard } = useAuth();
   
-  const navItems = [
+  const navItems: { to: string; icon: React.ComponentType<any>; label: string; boardOnly?: boolean; }[] = [
     { to: "/dashboard", icon: LayoutDashboard, label: "Inicio" },
     { to: "/members", icon: Users, label: "Socios" },
     { to: "/minutes", icon: FileText, label: "Actas" },

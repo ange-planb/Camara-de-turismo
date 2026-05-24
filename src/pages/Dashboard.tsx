@@ -63,8 +63,8 @@ export default function Dashboard() {
   ], [memberCount, totalDebt, isBoard, currentFinances.balance, realBalance]);
 
   React.useEffect(() => {
-    // Real-time listener for user stats
-    const qUsers = query(collection(db, 'users'));
+    // Real-time listener for user stats (pointing to socios collection)
+    const qUsers = query(collection(db, 'socios'));
     const unsubscribeUsers = onSnapshot(qUsers, (snapshot) => {
       let debt = 0;
       const emails = new Set<string>();
@@ -227,7 +227,7 @@ export default function Dashboard() {
           if (existingEmails.has(emailClean)) continue;
 
           const id = 'user_' + emailClean.replace(/[^a-zA-Z0-9]/g, '');
-          const userRef = doc(db, 'users', id);
+          const userRef = doc(db, 'socios', id);
           
           batch.set(userRef, {
             uid: 'placeholder_' + Math.random().toString(36).substring(2, 8),
