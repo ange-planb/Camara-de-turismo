@@ -123,106 +123,116 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setUser(firebaseUser);
         if (firebaseUser) {
           const emailToQuery = firebaseUser.email?.toLowerCase().trim() || '';
-          
-          // 1. Check if doc with UID already exists
           const userDocRef = doc(db, 'socios', firebaseUser.uid);
-          const userDoc = await getDoc(userDocRef);
+          
+          // Detect Gmail normalization to make search robust
+          const isGmail = emailToQuery.endsWith('@gmail.com');
+          const emailBase = emailToQuery.split('@')[0];
+          const normalizedEmail = isGmail ? emailBase.replace(/\./g, '') + '@gmail.com' : emailToQuery;
+          
+          // Search in both 'email' and 'correo' fields to detect any duplicates or pre-registered docs
+          const qEmail = query(collection(db, 'socios'), where('email', 'in', [emailToQuery, normalizedEmail]));
+          const qCorreo = query(collection(db, 'socios'), where('correo', 'in', [emailToQuery, normalizedEmail]));
+          
+          const [snapEmail, snapCorreo] = await Promise.all([
+            getDocs(qEmail),
+            getDocs(qCorreo)
+          ]);
 
-          if (userDoc.exists()) {
-            // Already identified
-            const userData = userDoc.data();
-            setRole(normalizeUserRole(userData));
-          } else {
-            // 2. New login, check if there's a pre-registered doc (from CSV or manual add)
-            // Handle Gmail dots and aliases for robust matching
-            const isGmail = emailToQuery.endsWith('@gmail.com');
-            const emailBase = emailToQuery.split('@')[0];
-            const normalizedEmail = isGmail ? emailBase.replace(/\./g, '') + '@gmail.com' : emailToQuery;
-            
-            // Search in both 'email' and 'correo' fields to be 100% robust
-            const qEmail = query(collection(db, 'socios'), where('email', 'in', [emailToQuery, normalizedEmail]));
-            const qCorreo = query(collection(db, 'socios'), where('correo', 'in', [emailToQuery, normalizedEmail]));
-            
-            const [snapEmail, snapCorreo] = await Promise.all([
-              getDocs(qEmail),
-              getDocs(qCorreo)
-            ]);
-            
-            let preDoc = null;
-            if (!snapEmail.empty) {
-              preDoc = snapEmail.docs[0];
-            } else if (!snapCorreo.empty) {
-              preDoc = snapCorreo.docs[0];
+          const allMatchingDocs = [...snapEmail.docs, ...snapCorreo.docs];
+          const uniqueMatchingDocs = allMatchingDocs.filter((docItem, index, self) =>
+            self.findIndex(d => d.id === docItem.id) === index
+          );
+
+          // Find if there is an existing document under actual firebase uid
+          const existingUidDoc = uniqueMatchingDocs.find(d => d.id === firebaseUser.uid);
+          
+          // Find duplicate/placeholder docs under separate custom IDs
+          const otherMatchingDocs = uniqueMatchingDocs.filter(d => d.id !== firebaseUser.uid);
+
+          let mergedData: any = {};
+          if (existingUidDoc) {
+            mergedData = { ...existingUidDoc.data() };
+          }
+
+          // Merge any details/roles from duplicate files
+          if (otherMatchingDocs.length > 0) {
+            for (const otherDoc of otherMatchingDocs) {
+              const dData = otherDoc.data();
+              mergedData.name = mergedData.name || dData.name || dData.nombre || '';
+              mergedData.nombre = mergedData.nombre || dData.nombre || dData.name || '';
+              mergedData.rut = mergedData.rut || dData.rut || dData.RUT || '';
+              mergedData.RUT = mergedData.RUT || dData.RUT || dData.rut || '';
+              mergedData.phone = mergedData.phone || dData.phone || dData.telefono || '';
+              mergedData.telefono = mergedData.telefono || dData.telefono || dData.phone || '';
+              mergedData.business = mergedData.business || dData.business || dData.emprendimiento || '';
+              mergedData.emprendimiento = mergedData.emprendimiento || dData.emprendimiento || dData.business || '';
+              mergedData.category = mergedData.category || dData.category || dData.categoria || 'COMERCIO';
+              mergedData.categoria = mergedData.categoria || dData.categoria || dData.category || 'COMERCIO';
+              mergedData.status = mergedData.status || dData.status || dData.estado || 'ACTIVO';
+              mergedData.estado = mergedData.estado || dData.estado || dData.status || 'ACTIVO';
+              mergedData.debt = mergedData.debt !== undefined ? mergedData.debt : (dData.debt !== undefined ? dData.debt : 0);
+              mergedData.attendance = mergedData.attendance !== undefined ? mergedData.attendance : (dData.attendance !== undefined ? dData.attendance : 0);
+              
+              const currentRole = normalizeUserRole(mergedData);
+              const docRole = normalizeUserRole(dData);
+              if (currentRole === 'MEMBER' && docRole !== 'MEMBER') {
+                mergedData.role = docRole;
+                mergedData.rol = docRole;
+              }
+            }
+          }
+
+          // Ensure basic parameters
+          mergedData.email = (mergedData.email || emailToQuery).toLowerCase().trim();
+          mergedData.correo = (mergedData.correo || emailToQuery).toLowerCase().trim();
+          mergedData.uid = firebaseUser.uid;
+
+          // SPECIAL OWNER BYPASS: If email is the president, enforce PRESIDENTA credentials absolutely
+          if (emailToQuery === 'solucionesgraficasplanb@gmail.com') {
+            mergedData.role = 'PRESIDENTA';
+            mergedData.rol = 'PRESIDENTA';
+            if (!mergedData.name || mergedData.name === 'Socio' || mergedData.name === 'Presidenta') {
+              mergedData.name = 'ANGELICA CAROLINA BUSTOS PEÑA';
+              mergedData.nombre = 'ANGELICA CAROLINA BUSTOS PEÑA';
+            }
+            if (!mergedData.rut || mergedData.rut === 'Pte.' || !mergedData.rut) {
+              mergedData.rut = '15.110.132-1';
+              mergedData.RUT = '15.110.132-1';
+            }
+            if (!mergedData.business) {
+              mergedData.business = 'PUBLICIDAD PLAN B SOLUCIONES GRAFICAS';
+              mergedData.emprendimiento = 'PUBLICIDAD PLAN B SOLUCIONES GRAFICAS';
+            }
+          }
+
+          const finalRole = normalizeUserRole(mergedData);
+          mergedData.role = finalRole;
+          mergedData.rol = finalRole;
+
+          const isAuthorized = uniqueMatchingDocs.length > 0 || emailToQuery === 'solucionesgraficasplanb@gmail.com';
+
+          if (isAuthorized) {
+            // Write finalized merged data to UID path
+            await setDoc(userDocRef, {
+              ...mergedData,
+              updatedAt: new Date().toISOString()
+            }, { merge: true });
+
+            // Clean up and delete ALL duplicate documents under placeholder IDs
+            for (const docToDelete of otherMatchingDocs) {
+              await deleteDoc(doc(db, 'socios', docToDelete.id));
             }
 
-            if (preDoc) {
-              const rawData = preDoc.data();
-              const standardizedRole = normalizeUserRole(rawData);
-              
-              // Standardize to English fields while preserving Spanish ones for safety
-              const standardizedData = {
-                uid: firebaseUser.uid,
-                name: rawData.name || rawData.nombre || firebaseUser.displayName || 'Socio',
-                email: (rawData.email || rawData.correo || emailToQuery).toLowerCase().trim(),
-                role: standardizedRole,
-                status: rawData.status || rawData.estado || 'ACTIVO',
-                rut: rawData.rut || rawData.RUT || 'Pte.',
-                business: rawData.business || rawData.emprendimiento || '',
-                phone: rawData.phone || rawData.telefono || '',
-                category: rawData.category || rawData.categoria || 'COMERCIO',
-                debt: rawData.debt || 0,
-                attendance: rawData.attendance || 0,
-                updatedAt: new Date().toISOString(),
-                
-                // Add Spanish mappings so they look clean and complete on the Firebase console
-                nombre: rawData.name || rawData.nombre || firebaseUser.displayName || 'Socio',
-                correo: (rawData.email || rawData.correo || emailToQuery).toLowerCase().trim(),
-                rol: standardizedRole,
-                estado: rawData.status || rawData.estado || 'ACTIVO',
-                RUT: rawData.rut || rawData.RUT || 'Pte.',
-                emprendimiento: rawData.business || rawData.emprendimiento || '',
-                telefono: rawData.phone || rawData.telefono || '',
-                categoria: rawData.category || rawData.categoria || 'COMERCIO'
-              };
-
-              // Move data to the official UID doc
-              await setDoc(userDocRef, standardizedData);
-
-              // Delete OLD placeholder to prevent "vitiated" or double entries
-              if (preDoc.id !== firebaseUser.uid) {
-                await deleteDoc(doc(db, 'socios', preDoc.id));
-              }
-              
-              setRole(standardizedRole);
-            } else if (emailToQuery === 'solucionesgraficasplanb@gmail.com') {
-              // Auto-bootstrap for system owner
-              const presidentRole: UserRole = 'PRESIDENTA';
-              const bootstrapData = {
-                uid: firebaseUser.uid,
-                name: firebaseUser.displayName || 'Presidenta',
-                email: emailToQuery,
-                role: presidentRole,
-                status: 'ACTIVO',
-                debt: 0,
-                attendance: 0,
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-                nombre: firebaseUser.displayName || 'Presidenta',
-                correo: emailToQuery,
-                rol: presidentRole,
-                estado: 'ACTIVO'
-              };
-              await setDoc(userDocRef, bootstrapData);
-              setRole(presidentRole);
-            } else {
-              // Not found in DB
-              alert(`ACCESO DENEGADO: Su correo (${emailToQuery}) no figura en la base de datos oficial.
+            setRole(finalRole);
+          } else {
+            // Not registered in system
+            alert(`ACCESO DENEGADO: Su correo (${emailToQuery}) no figura en la base de datos oficial.
 
 Por favor, contacte a la directiva para verificar que su correo fue ingresado exactamente igual al que está usando ahora.`);
-              await signOut(auth);
-              setUser(null);
-              setRole(null);
-            }
+            await signOut(auth);
+            setUser(null);
+            setRole(null);
           }
         } else {
           setRole(null);
