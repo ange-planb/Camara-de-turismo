@@ -668,14 +668,16 @@ export default function Finances() {
             >
               RESUMEN GENERAL
             </button>
-            <button 
-              onClick={() => setActiveTab('FEES')}
-              className={`px-6 py-2.5 rounded-xl text-xs font-black tracking-widest transition-all ${
-                activeTab === 'FEES' ? 'bg-white shadow-sm text-primary' : 'text-light-coffee hover:text-coffee'
-              }`}
-            >
-              CUOTAS
-            </button>
+            {isBoard && (
+              <button 
+                onClick={() => setActiveTab('FEES')}
+                className={`px-6 py-2.5 rounded-xl text-xs font-black tracking-widest transition-all ${
+                  activeTab === 'FEES' ? 'bg-white shadow-sm text-primary' : 'text-light-coffee hover:text-coffee'
+                }`}
+              >
+                CUOTAS
+              </button>
+            )}
             {isBoard && (
               <button 
                 onClick={() => setActiveTab('EXPENSES')}
@@ -856,7 +858,7 @@ export default function Finances() {
               </div>
             </div>
           </>
-        ) : (
+        ) : activeTab === 'FEES' && !isBoard ? null : (
           /* FEE MANAGEMENT TAB */
           <div className="space-y-8">
             <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
