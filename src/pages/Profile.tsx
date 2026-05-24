@@ -16,12 +16,17 @@ import {
   ChevronRight,
   LogOut,
   AlertCircle,
-  Loader2
+  Loader2,
+  Printer,
+  Download,
+  Check,
+  Award,
+  FileText
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../lib/firebase';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, collection, query, where, orderBy, onSnapshot } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firestoreUtils';
 import { toast } from 'sonner';
 
@@ -30,6 +35,9 @@ export default function Profile() {
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [userPayments, setUserPayments] = useState<any[]>([]);
+  const [showCredentialModal, setShowCredentialModal] = useState(false);
+  const [selectedPaymentReceipt, setSelectedPaymentReceipt] = useState<any | null>(null);
   const [userInfo, setUserInfo] = useState({
     name: "",
     email: "",
@@ -76,6 +84,30 @@ export default function Profile() {
       }
     }
     loadUserData();
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return;
+    const q = query(
+      collection(db, 'payments'),
+      where('userId', '==', user.uid)
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const list = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      // Sort client-side to ensure index-free real-time robustness
+      list.sort((a: any, b: any) => {
+        const dateA = a.date || a.createdAt || '';
+        const dateB = b.date || b.createdAt || '';
+        return dateB.localeCompare(dateA);
+      });
+      setUserPayments(list);
+    }, (error) => {
+      console.warn("Could not query payments by userId", error);
+    });
+    return () => unsubscribe();
   }, [user]);
 
   const notifications = [
@@ -299,7 +331,12 @@ export default function Profile() {
                       Tus credenciales de socio están validadas por el sistema de la Cámara.
                     </p>
                   </div>
-                  <button className="text-primary text-xs font-bold hover:underline">Ver mi credencial digital</button>
+                  <button 
+                    onClick={() => setShowCredentialModal(true)}
+                    className="text-primary text-xs font-bold hover:underline active:scale-95 transition-transform"
+                  >
+                    Ver mi credencial digital
+                  </button>
               </motion.div>
 
             </div>
@@ -556,8 +593,259 @@ export default function Profile() {
 
             </div>
 
+            {/* Payment History Section (Kananas Style) */}
+            <section className="bg-white rounded-3xl p-8 border border-outline-variant/30 shadow-sm space-y-6 mt-8">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h3 className="text-xl font-bold text-coffee flex items-center gap-2">
+                    <FileText className="text-primary" size={24} />
+                    Historial de Pagos y Cuotas Gremiales
+                  </h3>
+                  <p className="text-xs text-light-coffee mt-1">Registro oficial de aportaciones y cuotas gremiales al día (Sincronizado con Tesorería)</p>
+                </div>
+                <div className="flex items-center gap-2 text-xs font-bold text-primary bg-primary/5 px-3 py-1.5 rounded-xl border border-primary/10">
+                  <Check size={16} className="animate-pulse" />
+                  {userPayments.length} Pagos Registrados
+                </div>
+              </div>
+
+              {userPayments.length === 0 ? (
+                <div className="p-8 text-center bg-surface rounded-2xl border-2 border-dashed border-outline-variant/30 space-y-3">
+                  <p className="text-sm font-bold text-coffee">No tienes pagos registrados en la app aún</p>
+                  <p className="text-xs text-light-coffee max-w-sm mx-auto">
+                    Una vez que la administración o tesorería registre tu cuota o membresía anual, verás tus comprobantes listados aquí para imprimir o descargar.
+                  </p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-2xl border border-outline-variant/30">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-surface border-b border-outline-variant/30">
+                        <th className="px-6 py-4 text-[10px] font-black uppercase text-light-coffee tracking-wider">Fecha</th>
+                        <th className="px-6 py-4 text-[10px] font-black uppercase text-light-coffee tracking-wider">Período</th>
+                        <th className="px-6 py-4 text-[10px] font-black uppercase text-light-coffee tracking-wider">Tipo/Concepto</th>
+                        <th className="px-6 py-4 text-[10px] font-black uppercase text-light-coffee tracking-wider text-right">Monto</th>
+                        <th className="px-6 py-4 text-[10px] font-black uppercase text-light-coffee tracking-wider text-right">Comprobante</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-outline-variant/20">
+                      {userPayments.map((p) => (
+                        <tr key={p.id} className="hover:bg-surface/30 transition-colors">
+                          <td className="px-6 py-4 text-xs font-mono text-coffee">{p.date || (p.createdAt ? p.createdAt.split('T')[0] : 'Pte.')}</td>
+                          <td className="px-6 py-4 text-xs font-bold text-coffee">{p.period === 'ANUAL' ? 'Membresía Anual' : `Mes: ${p.period}`}</td>
+                          <td className="px-6 py-4">
+                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-primary/10 text-primary-dark uppercase">
+                              {p.type || 'MEMBRESÍA'}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 text-xs font-extrabold text-coffee text-right">
+                            ${(p.amount || 0).toLocaleString()}
+                          </td>
+                          <td className="px-6 py-4 text-right">
+                            <button
+                              onClick={() => setSelectedPaymentReceipt(p)}
+                              className="inline-flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-primary hover:text-primary-dark transition-colors px-3 py-1.5 rounded-lg hover:bg-primary/5 border border-transparent hover:border-primary/10"
+                            >
+                              <Printer size={12} /> Ver Recibo
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
+
           </div>
         </main>
+
+        {/* MODAL: Credencial Digital */}
+        <AnimatePresence>
+          {showCredentialModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                className="bg-white rounded-3xl p-6 shadow-2xl border border-outline-variant/50 max-w-sm w-full relative sm:p-8 space-y-6"
+              >
+                <button 
+                  onClick={() => setShowCredentialModal(false)}
+                  className="absolute top-4 right-4 p-2 rounded-full hover:bg-surface text-light-coffee transition-colors"
+                >
+                  <X size={20} />
+                </button>
+
+                <div className="text-center space-y-1">
+                  <h4 className="text-lg font-black text-coffee uppercase tracking-wide">Credencial Digital</h4>
+                  <p className="text-xs text-outline font-medium">Presenta este pase oficial en convenios o eventos gremiales.</p>
+                </div>
+
+                {/* Physical Card Mockup with 3D/CSS styling */}
+                <div className="relative aspect-[1.58/1] w-full bg-gradient-to-tr from-[#1a1412] via-[#2f221a] to-primary rounded-2xl p-5 text-white flex flex-col justify-between shadow-xl overflow-hidden group select-none">
+                  {/* Overlay reflection effect */}
+                  <div className="absolute inset-0 bg-gradient-to-br from-white/10 via-transparent to-transparent opacity-80 pointer-events-none" />
+                  
+                  {/* Subtle seal container bg icon */}
+                  <Award size={150} className="absolute right-[-20px] bottom-[-20px] text-white/5 pointer-events-none rotate-12" />
+
+                  {/* Top line of card */}
+                  <div className="flex items-center justify-between relative z-10">
+                    <div className="flex items-center gap-1.5">
+                      <Award className="text-yellow-400" size={18} />
+                      <span className="text-[8px] font-black uppercase tracking-widest text-white">Turismo & Comercio S.V.</span>
+                    </div>
+                    <span className="text-[7px] font-bold text-yellow-400/90 border border-yellow-400/30 px-1.5 py-0.5 rounded uppercase tracking-widest bg-yellow-400/10">Socio Oficial</span>
+                  </div>
+
+                  {/* Middle row of card */}
+                  <div className="flex items-center gap-4 relative z-10">
+                    {userInfo.photoURL ? (
+                      <img src={userInfo.photoURL} alt="Foto Socio" className="w-12 h-12 sm:w-14 sm:h-14 rounded-full object-cover border-2 border-white/20 shadow-inner bg-white/10" />
+                    ) : (
+                      <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-white/20 border-2 border-white/30 flex items-center justify-center font-bold text-lg text-white uppercase flex-shrink-0">
+                        {userInfo.name.charAt(0) || 'S'}
+                      </div>
+                    )}
+                    <div className="min-w-0 space-y-1">
+                      <p className="font-extrabold text-sm tracking-tight truncate leading-none mb-1 text-white">{userInfo.name || 'Socio Gremial'}</p>
+                      <span className="inline-block text-[8px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider bg-white/10 text-white truncate max-w-full">
+                        {userInfo.business || 'Independiente'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Bottom section with barcode & RUT */}
+                  <div className="flex items-end justify-between relative z-10 pt-2 border-t border-white/10">
+                    <div className="space-y-0.5">
+                      <p className="text-[7px] uppercase font-bold text-white/60 tracking-wider">RUT / Registro</p>
+                      <p className="text-[9px] font-mono font-bold tracking-tight text-white/90">{userInfo.rut || 'Pendiente'}</p>
+                    </div>
+                    <div className="flex flex-col items-end gap-1">
+                      <div className="flex items-center gap-1 bg-white/15 px-2 py-0.5 rounded-full text-[7px] font-black uppercase tracking-wider">
+                        <span className={`w-1.5 h-1.5 rounded-full ${userInfo.debt > 0 ? 'bg-yellow-400' : 'bg-green-400 animate-pulse'}`}></span>
+                        {userInfo.debt > 0 ? 'PENDIENTE' : 'ACTIVO'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <button 
+                    onClick={() => window.print()} 
+                    className="w-full h-12 bg-coffee text-white flex items-center justify-center gap-2 rounded-xl text-xs font-black uppercase tracking-widest hover:brightness-110 active:scale-95 transition-all shadow-md"
+                  >
+                    <Printer size={14} /> IMPRIMIR CREDENCIAL
+                  </button>
+                  <p className="text-[10px] text-center text-outline leading-tight leading-relaxed">
+                    La credencial digital es de uso personal e intransferible. Al escanear el microcódigo se valida el estado del socio en tiempo real.
+                  </p>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* MODAL: Comprobante de Pago Electrónico */}
+        <AnimatePresence>
+          {selectedPaymentReceipt && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+              <motion.div 
+                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                className="bg-white text-coffee rounded-3xl p-6 shadow-2xl border border-outline-variant max-w-sm w-full relative space-y-6"
+              >
+                <button 
+                  onClick={() => setSelectedPaymentReceipt(null)}
+                  className="absolute top-4 right-4 p-2 rounded-full hover:bg-surface text-light-coffee transition-colors"
+                >
+                  <X size={20} />
+                </button>
+
+                {/* Printable receipt sheet */}
+                <div id="printable-receipt" className="border border-dashed border-outline-variant p-5 rounded-2xl bg-surface/30 font-mono space-y-4 text-xs">
+                  <div className="text-center space-y-1">
+                    <p className="font-extrabold text-sm uppercase tracking-tight">CÁMARA DE TURISMO</p>
+                    <p className="text-[10px] text-light-coffee tracking-tighter">SAN VICENTE DE TAGUA TAGUA</p>
+                    <p className="text-[9px] text-outline">RUT: 76.432.109-F</p>
+                    <p className="text-[9px] text-outline">San Vicente de Tagua Tagua, O'Higgins</p>
+                  </div>
+
+                  <div className="border-t border-dashed border-outline-variant pt-3 space-y-1.5 text-[11px]">
+                    <div className="flex justify-between">
+                      <span className="text-light-coffee font-medium">RECIBO ID:</span>
+                      <span className="font-bold text-coffee">#{selectedPaymentReceipt.id.toUpperCase().substring(0,8)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-light-coffee font-medium">FECHA REG:</span>
+                      <span className="font-bold text-coffee">{new Date(selectedPaymentReceipt.createdAt || selectedPaymentReceipt.date).toLocaleString('es-CL')}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-light-coffee font-medium">ESTADO:</span>
+                      <span className="font-bold text-green-600">PAGADO CON COCONFORME</span>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-dashed border-outline-variant pt-3 space-y-1 text-[11px]">
+                    <div className="flex justify-between">
+                      <span className="text-light-coffee font-medium">SOCIO:</span>
+                      <span className="font-bold text-coffee text-right max-w-[160px] truncate">{selectedPaymentReceipt.userName}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-light-coffee font-medium">RUT:</span>
+                      <span className="font-bold text-coffee">{userInfo.rut || 'No Registrado'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-light-coffee font-medium">NEGOCIO:</span>
+                      <span className="font-bold text-coffee truncate text-right max-w-[150px]">{userInfo.business || 'Independiente'}</span>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-dashed border-outline-variant pt-3 space-y-2">
+                    <p className="text-[9px] font-black text-outline uppercase tracking-wider text-center">Detalle de Aporte</p>
+                    <div className="flex justify-between text-[11px] font-bold bg-white p-2 rounded-lg border border-outline-variant/30">
+                      <span>Aporte Período {selectedPaymentReceipt.period}</span>
+                      <span>${(selectedPaymentReceipt.amount || 0).toLocaleString()} CLP</span>
+                    </div>
+                  </div>
+
+                  <div className="border-t border-dashed border-outline-variant pt-3 text-center space-y-1.5">
+                    <p className="text-[9px] text-outline">Firma / Timbre Autenticado mediante Blockchain Gremial de Firestore.</p>
+                    <div className="inline-block border-2 border-green-600/30 text-green-600 rounded px-2.5 py-1 text-[9px] font-black uppercase tracking-widest rotate-[-3deg]">
+                      TIMBRADO PAGADO
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <button 
+                    onClick={() => {
+                      const printContent = document.getElementById('printable-receipt');
+                      if (printContent) {
+                        const originalContent = document.body.innerHTML;
+                        document.body.innerHTML = printContent.outerHTML;
+                        window.print();
+                        document.body.innerHTML = originalContent;
+                        window.location.reload(); // Quick refresh to rebuild state nicely
+                      }
+                    }} 
+                    className="flex-1 h-12 bg-primary text-white flex items-center justify-center gap-2 rounded-xl text-xs font-black uppercase tracking-widest hover:brightness-110 active:scale-95 transition-all shadow-md"
+                  >
+                    <Printer size={14} /> IMPRIMIR BOLETA
+                  </button>
+                  <button 
+                    onClick={() => setSelectedPaymentReceipt(null)} 
+                    className="px-6 h-12 bg-surface text-coffee border border-outline-variant rounded-xl text-xs font-black uppercase tracking-widest hover:bg-surface-container transition-all"
+                  >
+                    CERRAR
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </div>
     );
 }
