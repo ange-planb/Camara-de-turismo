@@ -19,7 +19,9 @@ import {
   X,
   CreditCard,
   MessageCircle,
-  BarChart
+  BarChart,
+  Edit2,
+  Trash2
 } from 'lucide-react';
 import { Line, Bar, Doughnut } from 'react-chartjs-2';
 import {
@@ -61,12 +63,14 @@ import {
   where, 
   orderBy,
   Timestamp,
-  writeBatch
+  writeBatch,
+  deleteDoc
 } from 'firebase/firestore';
 import { toast } from 'sonner';
 import { Skeleton } from '../components/ui/Skeleton';
+import { getMemberCalculatedData } from '../utils/paymentCalculator';
 
-type Year = keyof typeof FINANCIAL_HISTORY;
+type Year = string;
 
 interface Member {
   uid: string;
@@ -105,13 +109,30 @@ interface Transaction {
 
 export default function Finances() {
   const { role, isBoard, user: currentUser } = useAuth();
-  const [selectedYear, setSelectedYear] = useState<Year>("2025");
+  const [selectedYear, setSelectedYear] = useState<Year>("2026");
   const [activeTab, setActiveTab] = useState<'GENERAL' | 'FEES' | 'EXPENSES'>('GENERAL');
   
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const years = React.useMemo(() => {
+    const staticYears = Object.keys(FINANCIAL_HISTORY);
+    const transYears = transactions
+      .map(t => t.date ? t.date.split('-')[0] : '')
+      .filter(y => y && y.length === 4 && !isNaN(Number(y)));
+    const uniqueYears = Array.from(new Set([...staticYears, ...transYears, "2026"]));
+    return uniqueYears.sort((a, b) => b.localeCompare(a));
+  }, [transactions]);
+
+  const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
+  const [editForm, setEditForm] = useState({
+    amount: 0,
+    description: '',
+    category: '',
+    date: ''
+  });
   
   const realTimeSummary = React.useMemo(() => {
     const yearTrans = transactions.filter(t => t.date.startsWith(selectedYear.toString()));
@@ -166,17 +187,16 @@ export default function Finances() {
   }, [transactions, selectedYear]);
 
   const historicalChartData = React.useMemo(() => {
-    const labels = Object.keys(FINANCIAL_HISTORY);
+    const labels = [...years].reverse(); // oldest to newest for chart display
     return {
       labels,
       datasets: [
         {
           label: 'Ingresos',
           data: labels.map(y => {
-            const yr = parseInt(y);
-            const yrTrans = transactions.filter(t => t.date.startsWith(y));
+            const yrTrans = transactions.filter(t => t.date && t.date.startsWith(y));
             const realIncome = yrTrans.filter(t => t.type === 'INCOME').reduce((acc, t) => acc + t.amount, 0);
-            return realIncome || FINANCIAL_HISTORY[y as Year].totalIncome;
+            return realIncome || ((FINANCIAL_HISTORY as any)[y]?.totalIncome || 0);
           }),
           backgroundColor: '#006b5f',
           borderRadius: 8,
@@ -184,16 +204,16 @@ export default function Finances() {
         {
           label: 'Gastos',
           data: labels.map(y => {
-            const yrTrans = transactions.filter(t => t.date.startsWith(y));
+            const yrTrans = transactions.filter(t => t.date && t.date.startsWith(y));
             const realExpenses = yrTrans.filter(t => t.type === 'EXPENSE').reduce((acc, t) => acc + t.amount, 0);
-            return realExpenses || FINANCIAL_HISTORY[y as Year].totalExpenses;
+            return realExpenses || ((FINANCIAL_HISTORY as any)[y]?.totalExpenses || 0);
           }),
           backgroundColor: '#ef4444',
           borderRadius: 8,
         }
       ]
     };
-  }, [transactions]);
+  }, [transactions, years]);
 
   const categoryChartData = React.useMemo(() => {
     const { expenseList } = realTimeSummary;
@@ -359,7 +379,55 @@ export default function Finances() {
   });
 
   const isFinanceAdmin = role === 'PRESIDENTA' || role === 'TESORERA';
-  const years = Object.keys(FINANCIAL_HISTORY) as Year[];
+
+  const handleStartEdit = (t: Transaction) => {
+    setEditingTransaction(t);
+    setEditForm({
+      amount: t.amount,
+      description: t.description,
+      category: t.category,
+      date: t.date || new Date().toISOString().split('T')[0]
+    });
+  };
+
+  const handleUpdateTransaction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTransaction) return;
+
+    setIsSubmitting(true);
+    try {
+      await updateDoc(doc(db, 'transactions', editingTransaction.id), {
+        amount: Number(editForm.amount),
+        description: editForm.description,
+        category: editForm.category,
+        date: editForm.date
+      });
+      setEditingTransaction(null);
+      toast.success("¡Transacción actualizada exitosamente!");
+    } catch (error) {
+      console.error("Error updating transaction:", error);
+      toast.error("Error al actualizar la transacción");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteTransaction = async (id: string) => {
+    if (!window.confirm("¿Estás seguro de que deseas eliminar esta transacción de forma permanente? No se puede deshacer.")) {
+      return;
+    }
+    
+    setIsSubmitting(true);
+    try {
+      await deleteDoc(doc(db, 'transactions', id));
+      toast.success("¡Transacción eliminada exitosamente!");
+    } catch (error) {
+      console.error("Error deleting transaction:", error);
+      toast.error("Error al eliminar la transacción");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   useEffect(() => {
     setLoading(true);
@@ -383,12 +451,31 @@ export default function Finances() {
     let unsubscribePayments = () => {};
 
     if (activeTab === 'FEES') {
-      const usersQuery = query(collection(db, 'socios'), orderBy('name', 'asc'));
+      const usersQuery = query(collection(db, 'socios'));
       unsubscribeUsers = onSnapshot(usersQuery, (snapshot) => {
-        const usersData = snapshot.docs.map(doc => ({
-          uid: doc.id,
-          ...doc.data()
-        })) as Member[];
+        const usersData = snapshot.docs.map(doc => {
+          const d = doc.data();
+          return {
+            uid: doc.id,
+            ...d,
+            name: d.name || d.nombre || 'Sin nombre',
+            email: d.email || d.correo || '',
+            rut: d.rut || d.RUT || '',
+            business: d.business || d.emprendimiento || '',
+            phone: d.phone || d.telefono || '',
+            category: d.category || d.categoria || 'COMERCIO',
+            status: d.status || d.estado || 'ACTIVO',
+            role: d.role || d.rol || 'MEMBER',
+            paymentModality: d.paymentModality || 'MENSUAL',
+            lastPaymentMonth: d.lastPaymentMonth || '',
+            debt: d.debt || 0,
+            createdAt: d.createdAt || ''
+          };
+        }) as Member[];
+
+        // Sort by name in memory
+        usersData.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
         setMembers(usersData);
         setLoading(false);
       });
@@ -486,7 +573,7 @@ export default function Finances() {
 
   const handleRecordExpense = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser) return;
+    if (!currentUser || !isFinanceAdmin) return;
 
     setIsSubmitting(true);
     try {
@@ -645,9 +732,21 @@ export default function Finances() {
     }
   };
 
-  const filteredMembers = members.filter(m => 
-    m.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    m.email.toLowerCase().includes(searchTerm.toLowerCase())
+  const computedMembers = React.useMemo(() => {
+    return members.map(m => {
+      const calc = getMemberCalculatedData(m, payments);
+      return {
+        ...m,
+        status: calc.status,
+        debt: calc.debt,
+        lastPaymentMonth: calc.lastPaymentMonth || m.lastPaymentMonth
+      };
+    });
+  }, [members, payments]);
+
+  const filteredMembers = computedMembers.filter(m => 
+    (m.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (m.email || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
@@ -784,17 +883,17 @@ export default function Finances() {
               {/* Income Table */}
               <div className="lg:col-span-12">
                 <div className="bg-white rounded-[2.5rem] border border-outline-variant/30 shadow-soft overflow-hidden">
-                  <div className="p-8 border-b border-outline-variant/30 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                  <div className="p-4 sm:p-8 border-b border-outline-variant/30 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
                     <h3 className="text-xl font-bold text-coffee flex items-center gap-2">
                        <PieChart className="text-primary" size={20} />
                        Historial de Transacciones {selectedYear}
                     </h3>
-                    <div className="flex items-center gap-4">
-                      <div className="relative">
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full lg:w-auto">
+                      <div className="relative w-full sm:w-auto">
                         <select 
                           value={selectedYear}
                           onChange={(e) => setSelectedYear(e.target.value as Year)}
-                          className="appearance-none bg-surface border border-outline-variant/30 rounded-xl px-6 py-2.5 pr-12 text-xs font-black text-coffee tracking-widest focus:outline-none focus:ring-2 focus:ring-primary/20 cursor-pointer"
+                          className="w-full sm:w-auto appearance-none bg-surface border border-outline-variant/30 rounded-xl px-6 py-2.5 pr-12 text-xs font-black text-coffee tracking-widest focus:outline-none focus:ring-2 focus:ring-primary/20 cursor-pointer"
                         >
                           {years.map(y => (
                             <option key={y} value={y}>FILTRAR: {y}</option>
@@ -805,7 +904,7 @@ export default function Finances() {
                       {isFinanceAdmin && (
                         <button 
                           onClick={() => setShowExpenseModal(true)}
-                          className="px-6 py-2.5 bg-red-500 text-white rounded-xl text-xs font-black tracking-widest shadow-md flex items-center gap-2 hover:bg-red-600 transition-all"
+                          className="w-full sm:w-auto justify-center px-6 py-2.5 bg-red-500 text-white rounded-xl text-xs font-black tracking-widest shadow-md flex items-center gap-2 hover:bg-red-600 transition-all"
                         >
                           <Plus size={16} /> REGISTRAR GASTO
                         </button>
@@ -820,6 +919,7 @@ export default function Finances() {
                           <th className="px-8 py-6">Concepto</th>
                           <th className="px-8 py-6">Categoría</th>
                           <th className="px-8 py-6 text-right">Monto</th>
+                          {isBoard && <th className="px-8 py-6 text-center">Acciones</th>}
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-outline-variant/20 font-medium">
@@ -847,6 +947,30 @@ export default function Finances() {
                                 {item.type === 'INCOME' ? '+' : '-'}${item.amount.toLocaleString()}
                               </p>
                             </td>
+                            {isBoard && (
+                              <td className="px-8 py-6 text-center">
+                                {item.id && !item.id.startsWith('summary_') ? (
+                                  <div className="flex items-center justify-center gap-2">
+                                    <button
+                                      onClick={() => handleStartEdit(item)}
+                                      className="p-1.5 text-blue-600 hover:bg-blue-50 hover:text-blue-700 rounded-lg transition-all"
+                                      title="Editar transacción"
+                                    >
+                                      <Edit2 size={14} />
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeleteTransaction(item.id)}
+                                      className="p-1.5 text-red-500 hover:bg-red-50 hover:text-red-700 rounded-lg transition-all"
+                                      title="Borrar transacción"
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <span className="text-[10px] text-light-coffee/40 italic font-mono">Histórico</span>
+                                )}
+                              </td>
+                            )}
                           </tr>
                         ))}
                       </tbody>
@@ -862,19 +986,19 @@ export default function Finances() {
             <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="bg-white p-6 rounded-3xl border border-outline-variant/30 text-center space-y-2">
                 <p className="text-[10px] font-black text-light-coffee uppercase tracking-widest font-mono">Total Socios</p>
-                <p className="text-3xl font-black text-coffee">{members.length}</p>
+                <p className="text-3xl font-black text-coffee">{computedMembers.length}</p>
               </div>
               <div className="bg-green-50 p-6 rounded-3xl border border-green-100 text-center space-y-2">
                 <p className="text-[10px] font-black text-green-600 uppercase tracking-widest font-mono">Al Día</p>
-                <p className="text-3xl font-black text-green-700">{members.filter(m => m.status === 'ACTIVO').length}</p>
+                <p className="text-3xl font-black text-green-700">{computedMembers.filter(m => m.status === 'ACTIVO').length}</p>
               </div>
               <div className="bg-red-50 p-6 rounded-3xl border border-red-100 text-center space-y-2">
                 <p className="text-[10px] font-black text-red-600 uppercase tracking-widest font-mono">Morosos</p>
-                <p className="text-3xl font-black text-red-700">{members.filter(m => m.status === 'MOROSO').length}</p>
+                <p className="text-3xl font-black text-red-700">{computedMembers.filter(m => m.status === 'MOROSO').length}</p>
               </div>
               <div className="bg-primary/5 p-6 rounded-3xl border border-primary/20 text-center space-y-2">
                 <p className="text-[10px] font-black text-primary uppercase tracking-widest font-mono">Deuda Total</p>
-                <p className="text-3xl font-black text-primary">${members.reduce((acc, m) => acc + (m.debt || 0), 0).toLocaleString()}</p>
+                <p className="text-3xl font-black text-primary">${computedMembers.reduce((acc, m) => acc + (m.debt || 0), 0).toLocaleString()}</p>
               </div>
             </section>
 
@@ -969,22 +1093,11 @@ export default function Finances() {
                                       <button 
                                         onClick={() => {
                                           setSelectedMember(member);
-                                          setShowHistoryManager(true);
-                                          setHistoryYear("2025");
-                                          setSelectedMonthHistory([]);
-                                        }}
-                                        className="p-3 bg-primary/5 text-primary rounded-xl hover:bg-primary hover:text-white transition-all shadow-sm"
-                                        title="Ajustar Historial Histórico"
-                                      >
-                                        <History size={18} />
-                                      </button>
-                                      <button 
-                                        onClick={() => {
-                                          setSelectedMember(member);
                                           setPaymentForm({
                                             ...paymentForm,
                                             amount: member.paymentModality === 'ANUAL' ? 30000 : 3000,
-                                            type: member.paymentModality || 'MENSUAL'
+                                            type: member.paymentModality || 'MENSUAL',
+                                            period: member.paymentModality === 'ANUAL' ? '2026' : new Date().toISOString().slice(0, 7)
                                           });
                                           setShowPaymentModal(true);
                                         }}
@@ -1144,6 +1257,113 @@ export default function Finances() {
                   className="w-full bg-red-500 text-white py-5 rounded-[2rem] font-black tracking-widest shadow-xl shadow-red-200 hover:brightness-105 active:scale-[0.98] transition-all disabled:opacity-50 flex justify-center items-center gap-3"
                 >
                   {isSubmitting ? <Loader2 className="animate-spin" size={20} /> : 'REGISTRAR GASTO'}
+                </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit Transaction Modal */}
+      <AnimatePresence>
+        {editingTransaction && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }}
+              onClick={() => !isSubmitting && setEditingTransaction(null)}
+              className="absolute inset-0 bg-coffee/60 backdrop-blur-md"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="bg-white w-full max-w-md p-8 rounded-[3rem] shadow-2xl relative z-10"
+            >
+              <div className="flex justify-between items-start mb-8">
+                <div className="space-y-1">
+                   <h3 className="text-2xl font-black text-coffee">Editar Transacción</h3>
+                   <p className="text-xs font-bold text-primary uppercase tracking-widest pl-1">
+                     {editingTransaction.type === 'INCOME' ? 'Ingreso de Caja' : 'Egreso de Caja'}
+                   </p>
+                </div>
+                <button onClick={() => setEditingTransaction(null)} className="p-2 hover:bg-surface rounded-xl transition-colors">
+                  <X />
+                </button>
+              </div>
+
+              <form onSubmit={handleUpdateTransaction} className="space-y-6">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-primary uppercase tracking-widest px-1">Monto ($)</label>
+                  <div className="relative">
+                    <DollarSign className="absolute left-5 top-1/2 -translate-y-1/2 text-primary" size={20} />
+                    <input 
+                      type="number"
+                      required
+                      className="w-full pl-12 pr-6 py-4 bg-surface border border-outline-variant/30 rounded-2xl outline-none font-black text-xl text-primary"
+                      value={editForm.amount}
+                      onChange={(e) => setEditForm({...editForm, amount: parseInt(e.target.value) || 0})}
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-primary uppercase tracking-widest px-1">Concepto / Descripción</label>
+                  <input 
+                    type="text"
+                    required
+                    className="w-full px-6 py-4 bg-surface border border-outline-variant/30 rounded-2xl outline-none font-bold text-sm"
+                    value={editForm.description}
+                    onChange={(e) => setEditForm({...editForm, description: e.target.value})}
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-primary uppercase tracking-widest px-1">Fecha</label>
+                    <input 
+                      type="date"
+                      required
+                      className="w-full px-4 py-4 bg-surface border border-outline-variant/30 rounded-2xl outline-none font-bold text-sm"
+                      value={editForm.date}
+                      onChange={(e) => setEditForm({...editForm, date: e.target.value})}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-primary uppercase tracking-widest px-1">Categoría</label>
+                    {editingTransaction.type === 'INCOME' ? (
+                      <select 
+                        className="w-full px-4 py-4 bg-surface border border-outline-variant/30 rounded-2xl outline-none font-bold text-[10px] appearance-none"
+                        value={editForm.category}
+                        onChange={(e) => setEditForm({...editForm, category: e.target.value})}
+                      >
+                        <option value="CUOTAS">CUOTAS</option>
+                        <option value="DONACIONES">DONACIONES</option>
+                        <option value="EVENTOS">EVENTOS</option>
+                        <option value="OTROS">OTROS</option>
+                      </select>
+                    ) : (
+                      <select 
+                        className="w-full px-4 py-4 bg-surface border border-outline-variant/30 rounded-2xl outline-none font-bold text-[10px] appearance-none"
+                        value={editForm.category}
+                        onChange={(e) => setEditForm({...editForm, category: e.target.value})}
+                      >
+                        <option value="GASTOS OPERATIVOS">OPERATIVOS</option>
+                        <option value="SERVICIOS BÁSICOS">SERVICIOS</option>
+                        <option value="EVENTOS">EVENTOS</option>
+                        <option value="MARKETING">MARKETING</option>
+                        <option value="OTROS">OTROS</option>
+                      </select>
+                    )}
+                  </div>
+                </div>
+
+                <button 
+                  disabled={isSubmitting}
+                  className="w-full bg-primary text-white py-5 rounded-[2rem] font-black tracking-widest shadow-xl shadow-primary/20 hover:brightness-105 active:scale-[0.98] transition-all disabled:opacity-50 flex justify-center items-center gap-3"
+                >
+                  {isSubmitting ? <Loader2 className="animate-spin" size={20} /> : 'ACTUALIZAR TRANSACCIÓN'}
                 </button>
               </form>
             </motion.div>
@@ -1414,7 +1634,7 @@ export default function Finances() {
                         ...paymentForm, 
                         type,
                         amount: type === 'ANUAL' ? 30000 : 3000,
-                        period: type === 'ANUAL' ? `${new Date().getFullYear()}-ANNUAL` : new Date().toISOString().slice(0, 7)
+                        period: type === 'ANUAL' ? '2026' : new Date().toISOString().slice(0, 7)
                       });
                     }}
                   >
@@ -1424,14 +1644,27 @@ export default function Finances() {
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black text-primary uppercase tracking-widest px-1">Período Corresponding</label>
-                  <input 
-                    type={paymentForm.type === 'MENSUAL' ? "month" : "text"}
-                    required
-                    className="w-full px-6 py-4 bg-surface border border-outline-variant/30 rounded-2xl outline-none font-bold text-sm"
-                    value={paymentForm.period}
-                    onChange={(e) => setPaymentForm({...paymentForm, period: e.target.value})}
-                  />
+                  <label className="text-[10px] font-black text-primary uppercase tracking-widest px-1">Período Correspondiente</label>
+                  {paymentForm.type === 'ANUAL' ? (
+                    <select
+                      className="w-full h-14 px-6 py-4 bg-surface border border-outline-variant/30 rounded-2xl outline-none font-bold text-sm cursor-pointer"
+                      value={paymentForm.period}
+                      onChange={(e) => setPaymentForm({...paymentForm, period: e.target.value})}
+                    >
+                      <option value="2026">Año 2026</option>
+                      <option value="2025">Año 2025</option>
+                      <option value="2024">Año 2024</option>
+                      <option value="2023">Año 2023</option>
+                    </select>
+                  ) : (
+                    <input 
+                      type="month"
+                      required
+                      className="w-full px-6 py-4 bg-surface border border-outline-variant/30 rounded-2xl outline-none font-bold text-sm h-14"
+                      value={paymentForm.period}
+                      onChange={(e) => setPaymentForm({...paymentForm, period: e.target.value})}
+                    />
+                  )}
                   <p className="text-[9px] text-light-coffee/60 font-medium px-2 italic">Indica el mes o año que se está cancelando.</p>
                 </div>
 

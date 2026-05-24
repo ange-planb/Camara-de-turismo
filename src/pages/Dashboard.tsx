@@ -43,6 +43,7 @@ import { collection, query, where, getDocs, onSnapshot, writeBatch, doc } from '
 
 import { FINANCIAL_HISTORY } from '../constants/financialData';
 import CSVImporter from '../components/CSVImporter';
+import { getMemberCalculatedData } from '../utils/paymentCalculator';
 
 import { toast } from 'sonner';
 
@@ -63,20 +64,46 @@ export default function Dashboard() {
   ], [memberCount, totalDebt, isBoard, currentFinances.balance, realBalance]);
 
   React.useEffect(() => {
+    let localMembers: any[] = [];
+    let localPayments: any[] = [];
+
+    const recalculateDebt = () => {
+      let debt = 0;
+      const emails = new Set<string>();
+      localMembers.forEach(m => {
+        const calc = getMemberCalculatedData(m, localPayments);
+        debt += calc.debt;
+        if (m.email) emails.add(m.email.toLowerCase().trim());
+      });
+      setMemberCount(localMembers.length);
+      setExistingEmails(emails);
+      if (isBoard) setTotalDebt(debt);
+    };
+
     // Real-time listener for user stats (pointing to socios collection)
     const qUsers = query(collection(db, 'socios'));
     const unsubscribeUsers = onSnapshot(qUsers, (snapshot) => {
-      let debt = 0;
-      const emails = new Set<string>();
-      snapshot.forEach(doc => {
-        debt += doc.data().debt || 0;
-        if (doc.data().email) emails.add(doc.data().email.toLowerCase().trim());
-      });
-      setMemberCount(snapshot.size);
-      setExistingEmails(emails);
-      if (isBoard) setTotalDebt(debt);
+      localMembers = snapshot.docs.map(doc => ({
+        uid: doc.id,
+        id: doc.id,
+        ...doc.data(),
+        name: doc.data().name || doc.data().nombre || 'Sin nombre',
+        email: doc.data().email || doc.data().correo || '',
+        role: doc.data().role || doc.data().rol || 'MEMBER',
+        paymentModality: doc.data().paymentModality || 'MENSUAL'
+      }));
+      recalculateDebt();
     }, (error) => {
       console.error("Dashboard users listener error", error);
+    });
+
+    const qPayments = query(collection(db, 'payments'));
+    const unsubscribePayments = onSnapshot(qPayments, (snapshot) => {
+      localPayments = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      recalculateDebt();
     });
 
     // Real-time Balance
@@ -96,6 +123,7 @@ export default function Dashboard() {
 
     return () => {
       unsubscribeUsers();
+      unsubscribePayments();
       unsubscribeTrans();
     };
   }, [isBoard]);

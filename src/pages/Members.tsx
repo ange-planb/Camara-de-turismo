@@ -31,6 +31,7 @@ import { UserRole } from '../context/AuthContext';
 import { Skeleton } from '../components/ui/Skeleton';
 import { toast } from 'sonner';
 import { Download } from 'lucide-react';
+import { getMemberCalculatedData } from '../utils/paymentCalculator';
 
 const getCategoryIcon = (category: string) => {
   const c = category.toLowerCase();
@@ -42,11 +43,12 @@ const getCategoryIcon = (category: string) => {
 
 export default function Members() {
   const { role, isBoard } = useAuth();
-  const isTreasurer = role === 'TESORERA';
+  const isTreasurer = role === 'TESORERA' || role === 'PRESIDENTA';
   const isPresidenta = role === 'PRESIDENTA';
   const [searchTerm, setSearchTerm] = useState("");
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
   const [members, setMembers] = useState<any[]>([]);
+  const [payments, setPayments] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [editingMember, setEditingMember] = useState<any | null>(null);
@@ -57,7 +59,8 @@ export default function Members() {
     rut: '',
     business: '',
     phone: '',
-    category: 'COMERCIO'
+    category: 'COMERCIO',
+    role: 'MEMBER' as UserRole
   });
 
   const handleAddMember = async (e: React.FormEvent) => {
@@ -86,13 +89,14 @@ export default function Members() {
         emprendimiento: newMember.business.trim(),
         telefono: newMember.phone.trim(),
         categoria: newMember.category,
+        role: newMember.role,
+        rol: newMember.role,
         updatedAt: new Date().toISOString()
       };
 
       if (!editingMember) {
         Object.assign(payload, {
           uid: 'placeholder_' + Math.random().toString(36).substring(2, 8),
-          role: 'MEMBER',
           status: 'ACTIVO',
           estado: 'ACTIVO',
           debt: 0,
@@ -105,7 +109,7 @@ export default function Members() {
       toast.success(editingMember ? "Socio actualizado" : "Socio agregado exitosamente");
       setShowAddModal(false);
       setEditingMember(null);
-      setNewMember({ name: '', email: '', rut: '', business: '', phone: '', category: 'COMERCIO' });
+      setNewMember({ name: '', email: '', rut: '', business: '', phone: '', category: 'COMERCIO', role: 'MEMBER' });
     } catch (error) {
       console.error(error);
       toast.error("Error al guardar socio");
@@ -331,7 +335,7 @@ export default function Members() {
   useEffect(() => {
     // Listen directly to the 'socios' collection (fully resolved custom database)
     const q = query(collection(db, 'socios'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubscribeSocios = onSnapshot(q, (snapshot) => {
       let usersData = snapshot.docs.map(doc => {
         const d = doc.data();
         return {
@@ -344,7 +348,9 @@ export default function Members() {
           phone: d.phone || d.telefono || '',
           category: d.category || d.categoria || '',
           status: d.status || d.estado || 'ACTIVO',
-          role: d.role || d.rol || 'MEMBER'
+          role: d.role || d.rol || 'MEMBER',
+          paymentModality: d.paymentModality || d.paymentModality || 'MENSUAL',
+          lastPaymentMonth: d.lastPaymentMonth || ''
         };
       });
       
@@ -352,21 +358,44 @@ export default function Members() {
       setLoading(false);
     }, (error) => {
       console.error("Firestore users error:", error);
-      // Fallback for list permission if 'users' fails (rare but possible in some projects with 'socios')
       setLoading(false);
     });
 
-    return () => unsubscribe();
+    const qPayments = query(collection(db, 'payments'));
+    const unsubscribePayments = onSnapshot(qPayments, (snapshot) => {
+      const paymentsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }));
+      setPayments(paymentsData);
+    });
+
+    return () => {
+      unsubscribeSocios();
+      unsubscribePayments();
+    };
   }, []);
 
+  const computedMembers = React.useMemo(() => {
+    return members.map(m => {
+      const calc = getMemberCalculatedData(m, payments);
+      return {
+        ...m,
+        status: calc.status,
+        debt: calc.debt,
+        lastPaymentMonth: calc.lastPaymentMonth || m.lastPaymentMonth
+      };
+    });
+  }, [members, payments]);
+
   const filteredMembers = React.useMemo(() => {
-    return members.filter(member => 
+    return computedMembers.filter(member => 
       (member.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (member.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (member.business || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
       (member.rut || '').toLowerCase().includes(searchTerm.toLowerCase())
     );
-  }, [searchTerm, members]);
+  }, [searchTerm, computedMembers]);
 
   const handleRecordPayment = async (memberId: string, type: 'MENSUAL' | 'ANUAL') => {
     setRecordingPayment(memberId);
@@ -474,7 +503,19 @@ export default function Members() {
               <div className="flex items-center gap-3 w-full sm:w-auto overflow-x-auto pb-2 sm:pb-0">
                 {isBoard && (
                   <button 
-                    onClick={() => setShowAddModal(true)}
+                    onClick={() => {
+                      setEditingMember(null);
+                      setNewMember({
+                        name: '',
+                        email: '',
+                        rut: '',
+                        business: '',
+                        phone: '',
+                        category: 'COMERCIO',
+                        role: 'MEMBER'
+                      });
+                      setShowAddModal(true);
+                    }}
                     className="whitespace-nowrap px-4 py-2 bg-primary text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-md flex items-center gap-2 hover:bg-primary-dark transition-all"
                   >
                     <UserPlus size={14} /> NUEVO SOCIO
@@ -588,7 +629,7 @@ export default function Members() {
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-3 gap-3 pt-6 border-t border-surface-container">
+                      <div className="grid grid-cols-2 gap-3 pt-6 border-t border-surface-container">
                         <button 
                           onClick={() => {
                             if (member.phone) {
@@ -604,66 +645,6 @@ export default function Members() {
                           <span className="text-[9px] font-bold uppercase tracking-tighter">WhatsApp</span>
                         </button>
                         
-                        {isTreasurer ? (
-                          <div className="relative">
-                            <button 
-                              onClick={() => setShowPaymentOptions(showPaymentOptions === member.id ? null : member.id)}
-                              disabled={recordingPayment === member.id}
-                              className={`w-full flex flex-col items-center gap-1.5 p-3 rounded-xl transition-all ${
-                                recordingPayment === member.id 
-                                  ? 'bg-green-500 text-white shadow-md' 
-                                  : isMoroso 
-                                    ? 'bg-primary text-white shadow-md' 
-                                    : 'hover:bg-surface-container text-coffee'
-                              }`}
-                            >
-                              {recordingPayment === member.id ? (
-                                <Check size={20} className="animate-in zoom-in" />
-                              ) : (
-                                <Wallet size={20} className={isMoroso ? 'text-white' : 'text-primary'} />
-                              )}
-                              <span className="text-[9px] font-bold uppercase tracking-tighter">
-                                {recordingPayment === member.id ? 'Listo' : isMoroso ? 'Registrar' : 'Pago'}
-                              </span>
-                            </button>
-
-                            <AnimatePresence>
-                              {showPaymentOptions === member.id && (
-                                <motion.div 
-                                  initial={{ opacity: 0, y: 10, scale: 0.9 }}
-                                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                                  exit={{ opacity: 0, y: 10, scale: 0.9 }}
-                                  className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 bg-white rounded-2xl shadow-xl border border-outline-variant/30 p-2 z-50 overflow-hidden"
-                                >
-                                  <button 
-                                    onClick={() => handleRecordPayment(member.id, 'MENSUAL')}
-                                    className="w-full text-left p-3 hover:bg-surface rounded-xl transition-colors group"
-                                  >
-                                    <p className="text-[10px] font-bold text-light-coffee uppercase tracking-widest leading-none mb-1">Cuota Mensual</p>
-                                    <p className="text-sm font-bold text-coffee">$3.000 CLP</p>
-                                  </button>
-                                  <div className="h-px bg-surface-container mx-2" />
-                                  <button 
-                                    onClick={() => handleRecordPayment(member.id, 'ANUAL')}
-                                    className="w-full text-left p-3 hover:bg-surface rounded-xl transition-colors"
-                                  >
-                                    <p className="text-[10px] font-bold text-primary uppercase tracking-widest leading-none mb-1">Membresía Anual</p>
-                                    <div className="flex items-center justify-between">
-                                      <p className="text-sm font-bold text-coffee">$30.000 CLP</p>
-                                      <span className="bg-primary/10 text-primary text-[8px] px-1.5 py-0.5 rounded font-black">-16%</span>
-                                    </div>
-                                  </button>
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
-                          </div>
-                        ) : (
-                          <button className="flex flex-col items-center gap-1.5 p-3 rounded-xl text-outline-variant bg-surface cursor-not-allowed opacity-50">
-                            <Wallet size={20} />
-                            <span className="text-[9px] font-bold uppercase tracking-tighter">Tesorera</span>
-                          </button>
-                        )}
-
                         <div className="relative group/options">
                           <button 
                             onClick={() => {
@@ -673,7 +654,7 @@ export default function Members() {
                               }
                               setShowMemberMenu(showMemberMenu === member.id ? null : member.id);
                             }}
-                            className={`flex flex-col items-center gap-1.5 p-3 rounded-xl hover:bg-surface-container transition-all text-coffee ${!isBoard && 'opacity-20 translate-y-1 scale-95 hover:bg-transparent cursor-not-allowed'}`}
+                            className={`flex flex-col items-center gap-1.5 p-3 rounded-xl hover:bg-surface-container transition-all text-coffee w-full ${!isBoard && 'opacity-20 translate-y-1 scale-95 hover:bg-transparent cursor-not-allowed'}`}
                           >
                             <MoreVertical size={20} className="text-primary" />
                             <span className="text-[9px] font-bold uppercase tracking-tighter">Opciones</span>
@@ -696,7 +677,8 @@ export default function Members() {
                                       rut: member.rut || '',
                                       business: member.business || '',
                                       phone: member.phone || '',
-                                      category: member.category || 'COMERCIO'
+                                      category: member.category || 'COMERCIO',
+                                      role: member.role || member.rol || 'MEMBER'
                                     });
                                     setShowAddModal(true);
                                     setShowMemberMenu(null);
@@ -787,7 +769,8 @@ export default function Members() {
                                         rut: member.rut || '',
                                         business: member.business || '',
                                         phone: member.phone || '',
-                                        category: member.category || 'COMERCIO'
+                                        category: member.category || 'COMERCIO',
+                                        role: member.role || member.rol || 'MEMBER'
                                       });
                                       setShowAddModal(true);
                                     }}
@@ -900,6 +883,23 @@ export default function Members() {
                           <option value="GASTRONOMÍA">Gastronomía</option>
                           <option value="TRANSPORTE">Transporte</option>
                           <option value="ARTESANÍA">Artesanía</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-black text-light-coffee uppercase tracking-widest pl-1">Cargo en Directiva (Rol)</label>
+                        <select 
+                          className="w-full bg-surface border border-outline-variant/50 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-primary/20 outline-none"
+                          value={newMember.role}
+                          onChange={(e) => setNewMember({...newMember, role: e.target.value as UserRole})}
+                        >
+                          <option value="MEMBER">Socio Gremial General (Sin cargo)</option>
+                          <option value="PRESIDENTA">Presidenta</option>
+                          <option value="VICE_PRESIDENTA">Vicepresidenta</option>
+                          <option value="TESORERA">Tesorera</option>
+                          <option value="SECRETARIA">Secretaria/o</option>
+                          <option value="DIRECTOR_1">Director 1</option>
+                          <option value="DIRECTOR_2">Director 2</option>
+                          <option value="DIRECTOR_3">Director 3</option>
                         </select>
                       </div>
                     </div>
