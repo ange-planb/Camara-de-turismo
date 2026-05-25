@@ -429,6 +429,59 @@ export default function Finances() {
     }
   };
 
+  const handleDeletePayment = async (payment: Payment) => {
+    if (!window.confirm(`¿Estás seguro de que deseas eliminar este pago de $${payment.amount.toLocaleString()} de ${payment.userName}?`)) {
+      return;
+    }
+    
+    setIsSubmitting(true);
+    try {
+      const batch = writeBatch(db);
+      
+      // Delete the payment document
+      batch.delete(doc(db, 'payments', payment.id));
+      
+      // If payment has transactionId, delete that transaction
+      if ((payment as any).transactionId) {
+        batch.delete(doc(db, 'transactions', (payment as any).transactionId));
+      } else {
+        // Fallback: search in transactions state for matching transaction
+        const matchingTrans = transactions.find(t => 
+          t.userId === payment.userId && 
+          t.amount === payment.amount && 
+          t.category === 'CUOTAS' &&
+          (t.date === payment.date || t.description?.includes(payment.period))
+        );
+        if (matchingTrans && matchingTrans.id) {
+          batch.delete(doc(db, 'transactions', matchingTrans.id));
+        }
+      }
+
+      // Update the member's DB state to match the recalculated data
+      const remainingPayments = payments.filter(p => p.userId === payment.userId && p.id !== payment.id);
+      const memberObj = members.find(m => m.uid === payment.userId);
+      if (memberObj) {
+        const { getMemberCalculatedData } = await import('../utils/paymentCalculator');
+        const calc = getMemberCalculatedData(memberObj, remainingPayments);
+        const userRef = doc(db, 'socios', payment.userId);
+        batch.update(userRef, {
+          debt: calc.debt,
+          status: calc.status,
+          lastPaymentMonth: calc.lastPaymentMonth || '',
+          updatedAt: new Date().toISOString()
+        });
+      }
+      
+      await batch.commit();
+      toast.success("¡Pago eliminado exitosamente!");
+    } catch (error) {
+      console.error("Error deleting payment:", error);
+      toast.error("Error al eliminar el pago");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   useEffect(() => {
     setLoading(true);
     
@@ -516,8 +569,10 @@ export default function Finances() {
         if (y && m) transDate = `${y}-${m}-01`;
       }
 
-      // 1. Record payment record (audit)
+      const transRef = doc(collection(db, 'transactions'));
       const payRef = doc(collection(db, 'payments'));
+
+      // 1. Record payment record (audit)
       batch.set(payRef, {
         userId: selectedMember.uid,
         userName: selectedMember.name,
@@ -526,7 +581,8 @@ export default function Finances() {
         period: paymentForm.period,
         type: paymentForm.type,
         recordedBy: currentUser.uid,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        transactionId: transRef.id
       });
 
       // 2. Update user debt and status
@@ -548,7 +604,6 @@ export default function Finances() {
       batch.update(userRef, updates);
 
       // 3. Record generic transaction for summary
-      const transRef = doc(collection(db, 'transactions'));
       batch.set(transRef, {
         type: 'INCOME',
         category: 'CUOTAS',
@@ -1144,9 +1199,9 @@ export default function Finances() {
                   </div>
                   <div className="p-2 h-[600px] overflow-y-auto space-y-2">
                     {payments.map((p) => (
-                      <div key={p.id} className="p-4 rounded-3xl bg-surface border border-outline-variant/10 flex flex-col gap-2 hover:border-primary/20 transition-all">
+                      <div key={p.id} className="p-4 rounded-3xl bg-surface border border-outline-variant/10 flex flex-col gap-2 hover:border-primary/20 transition-all relative group">
                         <div className="flex justify-between items-start">
-                          <p className="text-[11px] font-black text-coffee uppercase line-clamp-1">{p.userName}</p>
+                          <p className="text-[11px] font-black text-coffee uppercase line-clamp-1 pr-6">{p.userName}</p>
                           <span className="text-[10px] font-black text-primary font-mono">${p.amount.toLocaleString()}</span>
                         </div>
                         <div className="flex justify-between items-end">
@@ -1154,7 +1209,19 @@ export default function Finances() {
                             <p className="text-[9px] font-bold text-light-coffee uppercase tracking-widest">{p.period}</p>
                             <p className="text-[8px] font-medium text-light-coffee/60 italic">{p.type}</p>
                           </div>
-                          <span className="text-[8px] font-bold text-light-coffee">{p.date}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[8px] font-bold text-light-coffee">{p.date}</span>
+                            {isBoard && (
+                              <button
+                                onClick={() => handleDeletePayment(p)}
+                                disabled={isSubmitting}
+                                className="p-1.5 text-red-500 hover:bg-red-50 hover:text-red-700 rounded-lg transition-all"
+                                title="Eliminar este pago"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                     ))}
